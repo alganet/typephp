@@ -24,6 +24,7 @@ use TypePhp\Build\NativeDependencyAuditor;
 use TypePhp\Build\NanoSourceComposer;
 use TypePhp\Build\PrecompiledHeaderManager;
 use TypePhp\Build\SourcePipelineTrait;
+use TypePhp\Build\SourceCompileQueue;
 use TypePhp\Build\WasmInterfaceGenerator;
 use TypePhp\Config\ProjectYamlLoader;
 use TypePhp\Diagnostics\CompileTimeAttributeDiagnostic;
@@ -82,7 +83,7 @@ class Translator extends Preprocessor
     use ResourceCompilationTrait;
     use ClassConstantValueTrait;
 
-    public const string VERSION = '0.8.1';
+    public const string VERSION = '0.8.2';
     public const string APP_NAME = 'TypePHP Compiler (AOT)';
 
     protected bool $hasExplicitOutput = false;
@@ -1903,26 +1904,18 @@ CODE;
 
     public function compileFile(string $cppFile, string $objectFile, bool $parallel = false): void
     {
-        $isCacheableMiscFile = $this->isPhpxMiscFile($cppFile)
-            && !$this->isProjectRuntimeEntryFile($cppFile);
-        $isNanoRuntimeSource = isset($this->nanoRuntimeSources[$cppFile]);
-        if ($isCacheableMiscFile && $this->hasMiscObjectFileCache($cppFile)) {
-            if (!$parallel) {
-                $this->climate->darkGray('[cache] skip: ' . $cppFile);
-            }
-            return;
-        }
-        if ($isNanoRuntimeSource && $this->hasNanoObjectFileCache($cppFile, $objectFile)) {
+        $task = $this->prepareCompileFileTask($cppFile, $objectFile, $parallel);
+        if ($task === null) {
             return;
         }
 
-        if ($isCacheableMiscFile) {
-            $this->invalidateMiscObjectCache($objectFile);
-        }
-
-        $language = $this->getLanguageFromExtension($cppFile);
-        $options = $this->getSourceCompileCommandOptions($cppFile, $language);
-        $result = $this->getNativeBuilder()->compile($cppFile, $objectFile, $options, $language, $parallel);
+        $result = $this->getNativeBuilder()->compile(
+            $cppFile,
+            $objectFile,
+            $task['options'],
+            $task['language'],
+            $parallel,
+        );
         if (!$parallel) {
             $this->climate->comment($result['command']);
         }
@@ -1935,10 +1928,55 @@ CODE;
             $this->error('compile failed: ' . $cppFile);
         }
 
+        $this->finalizeCompileFileTask($cppFile, $objectFile, $task);
+    }
+
+    /**
+     * @return null|array{
+     *     language: ?string,
+     *     options: CompileOptions,
+     *     cacheable_misc: bool,
+     *     nano_runtime: bool
+     * }
+     */
+    private function prepareCompileFileTask(
+        string $cppFile,
+        string $objectFile,
+        bool $parallel,
+    ): ?array {
+        $isCacheableMiscFile = $this->isPhpxMiscFile($cppFile)
+            && !$this->isProjectRuntimeEntryFile($cppFile);
+        $isNanoRuntimeSource = isset($this->nanoRuntimeSources[$cppFile]);
+        if ($isCacheableMiscFile && $this->hasMiscObjectFileCache($cppFile)) {
+            if (!$parallel) {
+                $this->climate->darkGray('[cache] skip: ' . $cppFile);
+            }
+            return null;
+        }
+        if ($isNanoRuntimeSource && $this->hasNanoObjectFileCache($cppFile, $objectFile)) {
+            return null;
+        }
+
         if ($isCacheableMiscFile) {
+            $this->invalidateMiscObjectCache($objectFile);
+        }
+
+        $language = $this->getLanguageFromExtension($cppFile);
+        return [
+            'language' => $language,
+            'options' => $this->getSourceCompileCommandOptions($cppFile, $language),
+            'cacheable_misc' => $isCacheableMiscFile,
+            'nano_runtime' => $isNanoRuntimeSource,
+        ];
+    }
+
+    /** @param array{cacheable_misc: bool, nano_runtime: bool} $task */
+    private function finalizeCompileFileTask(string $cppFile, string $objectFile, array $task): void
+    {
+        if ($task['cacheable_misc']) {
             $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
         }
-        if ($isNanoRuntimeSource) {
+        if ($task['nano_runtime']) {
             $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
         }
     }
@@ -2015,12 +2053,18 @@ CODE;
         // Windows: compile the resource file (icon, version info, etc.)
         $this->compileResourceFile();
 
-        if (!$this->getPlatform()->supportsPcntlParallelCompile() or $job <= 1) {
+        if ($job <= 1) {
             return $this->compileSourceFile($sourceFiles);
         }
 
-        // Unix/Linux/macOS compile in parallel using pcntl
-        return $this->compileWithPcntl($sourceFiles, $job);
+        if (function_exists('proc_open') && function_exists('proc_get_status')) {
+            return $this->compileWithProcessPool($sourceFiles, $job);
+        }
+
+        $this->climate->warning(
+            'proc_open/proc_get_status unavailable, using sequential compilation',
+        );
+        return $this->compileSourceFile($sourceFiles);
     }
 
     /** @param list<string> $generatedSources @return list<string> */
@@ -2151,63 +2195,8 @@ CODE;
         return $objectFiles;
     }
 
-    /**
-     * Parallel compilation on Unix/Linux/macOS (using pcntl).
-     */
-    protected function pcntlWait(?int &$status): int
+    protected function compileWithProcessPool(array $sourceFiles, int $job): array
     {
-        return pcntl_wait($status);
-    }
-
-    protected function pcntlFork(): int
-    {
-        return pcntl_fork();
-    }
-
-    protected function pcntlLastError(): int
-    {
-        return pcntl_get_last_error();
-    }
-
-    protected function waitForCompileChild(): array
-    {
-        do {
-            $status = null;
-            $pid = $this->pcntlWait($status);
-            $error = $pid === -1 ? $this->pcntlLastError() : 0;
-        } while ($pid === -1 && defined('PCNTL_EINTR') && $error === PCNTL_EINTR);
-
-        if ($pid === -1) {
-            $message = function_exists('pcntl_strerror') ? pcntl_strerror($error) : 'error ' . $error;
-            throw new \RuntimeException('Failed to wait for compiler process: ' . $message);
-        }
-
-        return [$pid, (int) $status];
-    }
-
-    protected function compileChildSucceeded(int $status): bool
-    {
-        return pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0;
-    }
-
-    protected function getCompileChildFailureReason(int $status): string
-    {
-        if (pcntl_wifsignaled($status)) {
-            return 'terminated by signal ' . pcntl_wtermsig($status);
-        }
-        if (pcntl_wifexited($status)) {
-            return 'exited with status ' . pcntl_wexitstatus($status);
-        }
-        return 'terminated abnormally';
-    }
-
-    protected function compileWithPcntl(array $sourceFiles, int $job): array
-    {
-        if (!function_exists('pcntl_fork')) {
-            $this->climate->warning('pcntl extension not available, using sequential compilation');
-            return $this->compileSourceFile($sourceFiles);
-        }
-
         $totalFiles = count($sourceFiles);
         $this->climate->lightBlue("Starting parallel compilation with {$job} jobs for {$totalFiles} files");
         $progress = null;
@@ -2218,29 +2207,78 @@ CODE;
                 ->labelStyle([AnsiTerminal::FG_CYAN]);
             $progress->renderInPlace(0, $totalFiles, 'Compiling');
         }
-        $result = $this->getNativeBuilder()->dispatchParallel(
-            $sourceFiles,
+
+        $tasks = [];
+        $cachedObjects = [];
+        $taskMetadata = [];
+        $completedBeforeDispatch = 0;
+        foreach (SourceCompileQueue::largestFirst($sourceFiles) as $source) {
+            $object = $this->getObjectFile($source);
+            $task = $this->prepareCompileFileTask($source, $object, true);
+            if ($task === null) {
+                $cachedObjects[] = $object;
+                $completedBeforeDispatch++;
+                if ($this->noProgress) {
+                    $percent = $completedBeforeDispatch >= $totalFiles
+                        ? 100
+                        : min(99, (int) ceil($completedBeforeDispatch / $totalFiles * 100));
+                    $shortSource = $this->removeCommonPrefix($this->buildDir, $source);
+                    $this->climate->white(
+                        "[{$completedBeforeDispatch}/{$totalFiles}] {$percent}% {$shortSource} [cache]",
+                    );
+                }
+                continue;
+            }
+            $tasks[] = [
+                'source' => $source,
+                'object' => $object,
+                'command' => $this->getNativeBuilder()->compileCommand(
+                    $source,
+                    $object,
+                    $task['options'],
+                    $task['language'],
+                ),
+            ];
+            $taskMetadata[$object] = $task;
+        }
+
+        if ($completedBeforeDispatch > 0 && !$this->noProgress) {
+            $progress->renderInPlace($completedBeforeDispatch, $totalFiles, 'Compiling');
+        }
+
+        $result = $this->getNativeBuilder()->dispatchProcessParallel(
+            $tasks,
             $job,
-            fn(string $source): string => $this->getObjectFile($source),
-            function (string $source, string $object): void {
-                $this->compileFile($source, $object, true);
-            },
-            fn(): int => $this->pcntlFork(),
-            fn(): array => $this->waitForCompileChild(),
-            fn(int $status): bool => $this->compileChildSucceeded($status),
-            function (string $source, string $object, int $status, bool $success, int $completed) use ($progress, $totalFiles): void {
-                if (!$success) {
-                    echo PHP_EOL;
-                    $this->climate->red("Compilation failed: {$source} ({$this->getCompileChildFailureReason($status)})");
+            function (
+                string $source,
+                string $object,
+                string $command,
+                array $output,
+                int $status,
+                bool $success,
+                int $completed,
+            ) use ($progress, $totalFiles, $completedBeforeDispatch, $taskMetadata): void {
+                $absoluteCompleted = $completedBeforeDispatch + $completed;
+                if ($success) {
+                    $this->finalizeCompileFileTask($source, $object, $taskMetadata[$object]);
+                } else {
+                    if (!$this->noProgress) {
+                        echo PHP_EOL;
+                    }
+                    foreach ($output as $line) {
+                        $this->climate->red($line);
+                    }
+                    $this->climate->red("Compilation failed: {$source} (exit status {$status})");
+                    $this->climate->comment($command);
                 }
                 if ($this->noProgress) {
-                    $percent = $completed >= $totalFiles
+                    $percent = $absoluteCompleted >= $totalFiles
                         ? 100
-                        : min(99, (int) ceil($completed / $totalFiles * 100));
+                        : min(99, (int) ceil($absoluteCompleted / $totalFiles * 100));
                     $shortSource = $this->removeCommonPrefix($this->buildDir, $source);
-                    $this->climate->white("[{$completed}/{$totalFiles}] {$percent}% {$shortSource}");
+                    $this->climate->white("[{$absoluteCompleted}/{$totalFiles}] {$percent}% {$shortSource}");
                 } else {
-                    $progress->renderInPlace($completed, $totalFiles, 'Compiling');
+                    $progress->renderInPlace($absoluteCompleted, $totalFiles, 'Compiling');
                 }
             },
         );
@@ -2253,7 +2291,7 @@ CODE;
             throw new \Exception('Compilation failed for: ' . implode(', ', $result['failures']));
         }
         $this->climate->green("Successfully compiled {$totalFiles} files");
-        return $result['objects'];
+        return [...$cachedObjects, ...$result['objects']];
     }
 
     public function output(string $message, string $style = 'out'): void

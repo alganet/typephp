@@ -41,8 +41,5 @@
     "cs-fix": "php-cs-fixer fix $1",
     "analyse": "phpstan analyse --memory-limit 1G -c phpstan.neon",
     "rector": "rector process --clear-cache"
-  },
-  "suggest": {
-    "ext-pcntl": "Required for process control features."
   }
 }
