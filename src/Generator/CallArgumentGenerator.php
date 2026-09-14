@@ -27,6 +27,7 @@ trait CallArgumentGenerator
         string $nativeFunc,
         int $parameterOffset = 0,
         bool $deferTrailingDefaults = false,
+        bool $materializeTrailingDefaults = false,
     ): string {
         $this->assertCallArgumentLimit($callArgs);
         $this->context->typedRefBridgeScopes[] = [];
@@ -117,6 +118,24 @@ trait CallArgumentGenerator
                         // Defaults are resolved in the declaration scope. Re-parsing
                         // the original AST here would evaluate self/parent/private
                         // class constants in the caller's scope instead.
+                        $defaultArgs[$k] = $this->genDefaultArgumentExpr($nativeFunc, $k);
+                    }
+                }
+            }
+
+            // Generated Native C++ class members deliberately do not expose
+            // C++ default arguments: PHP defaults belong to the selected PHP
+            // declaration, and virtual calls use arity-specific adapters.
+            // Direct member/constructor calls therefore materialize every
+            // omitted trailing default at the call site.
+            if ($materializeTrailingDefaults) {
+                foreach ($functionDef->argInfoList as $k => $argInfo) {
+                    if ($k < $parameterOffset || isset($providedArgs[$k]) || isset($defaultArgs[$k])) {
+                        continue;
+                    }
+                    if ($argInfo->variadic) {
+                        $defaultArgs[$k] = '{}';
+                    } elseif ($argInfo->hasDefaultValue()) {
                         $defaultArgs[$k] = $this->genDefaultArgumentExpr($nativeFunc, $k);
                     }
                 }

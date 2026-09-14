@@ -4218,13 +4218,14 @@ class CompilerBase implements PropertyAccessContext
                         }
                         $cppClass = $this->getNativeObjectCppName($className);
                         $descriptor = $this->getNativeObjectDescriptorName($className);
+                        $stackSlot = $this->getNativeStackSlotForAllocation($expr);
                         if ($constructor === null) {
                             if ($expr->args !== []) {
                                 $this->fatalError($expr, "Native class `{$className}` does not have a constructor");
                             }
-                            return 'php::nativeConstruct<' . $cppClass . '>(' . $descriptor
-                                . ', [&](auto &this_) { '
-                                . $this->getNativeObjectInitializerName($className) . '(this_); })';
+                            return $stackSlot === null
+                                ? 'php::nativeConstructObject<' . $cppClass . '>(' . $descriptor . ')'
+                                : $stackSlot . '.constructObject()';
                         }
                         $nativeCtor = $this->getNativeMethod($expr, $className, '__construct');
                         if ($nativeCtor === false) {
@@ -4234,13 +4235,16 @@ class CompilerBase implements PropertyAccessContext
                         // the AST argument array used by the ordinary-class
                         // path below. The self-hosted compiler assigns one
                         // fixed C++ type to each PHP local variable.
-                        $nativeArgs = $expr->args === []
-                            ? ''
-                            : ', ' . $this->parseNativeCallArgs($expr->args, $nativeCtor);
-                        return 'php::nativeConstruct<' . $cppClass . '>(' . $descriptor
-                            . ', [&](auto &this_) { '
-                            . $this->getNativeObjectInitializerName($className) . '(this_); '
-                            . self::PREFIX . $nativeCtor . '(this_' . $nativeArgs . '); })';
+                        $nativeArgs = $this->parseNativeCallArgs(
+                            $expr->args,
+                            $nativeCtor,
+                            materializeTrailingDefaults: true,
+                        );
+                        if ($stackSlot !== null) {
+                            return $stackSlot . '.constructObject(' . $nativeArgs . ')';
+                        }
+                        return 'php::nativeConstructObject<' . $cppClass . '>(' . $descriptor
+                            . ($nativeArgs === '' ? '' : ', ' . $nativeArgs) . ')';
                     }
                     $cePtr = $this->getLocalClassEntryPtr($className);
                 }
@@ -4278,12 +4282,7 @@ class CompilerBase implements PropertyAccessContext
                         "Call to {$visibility} {$declaringClassName}::__clone()",
                     );
                 }
-                $clone = self::PREFIX . $this->getNativeName(
-                    '__clone',
-                    $declaringClass->namespace,
-                    $declaringClass->name,
-                );
-                $initializer = $clone . '(this_); ';
+                $initializer = 'this_.' . $this->getNativeObjectMethodCppName('__clone') . '(); ';
             }
             if ($this->nativeObjectUsesVirtualClone($class)) {
                 return $this->getNativeObjectReceiver($source) . '.'
@@ -5527,6 +5526,13 @@ class CompilerBase implements PropertyAccessContext
                 . PHP_EOL;
         }
         $code .= $this->genLocalVarDecl($this->context->localVars);
+        foreach ($this->context->nativeStackPromotions as $promotion) {
+            $code .= $this->getIndent() . 'php::NativeStackSlot<'
+                . $this->getNativeObjectCppName($promotion['class']) . '> '
+                . $promotion['slot'] . '('
+                . $this->getNativeObjectDescriptorName($promotion['class']) . ');'
+                . PHP_EOL;
+        }
         foreach ($this->context->classEntryPtrs as $className => $entry) {
             $code .= $this->getIndent() . 'zend_class_entry *' . $entry . ' = '
                 . $this->getClassEntryPtr($className) . ';' . PHP_EOL;
@@ -5539,6 +5545,9 @@ class CompilerBase implements PropertyAccessContext
                 // nativeClone do the same for lifecycle callbacks). Only
                 // function-owned pointer slots must be registered here.
                 if ($name !== 'this_' && !$this->hasArgument($name) && $this->hasLocalVar($name)) {
+                    if (isset($this->context->nativeStackPromotions[$name])) {
+                        continue;
+                    }
                     $rootSlots[] = '&' . $name;
                 }
             }

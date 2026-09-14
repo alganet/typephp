@@ -6,6 +6,25 @@ use TypePhp\Exception\TestError;
 
 final class NativeClassValidationTest extends \BaseTest
 {
+    /**
+     * @dataProvider nativeMemberNameConflictProvider
+     */
+    public function testRejectsNativePropertyAndMethodNameConflicts(string $fixture): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('conflicts with');
+        $this->compile($fixture);
+    }
+
+    public static function nativeMemberNameConflictProvider(): array
+    {
+        return [
+            ['native-class-member-name-conflict.php'],
+            ['native-class-inherited-member-name-conflict.php'],
+            ['native-class-inherited-property-name-conflict.php'],
+        ];
+    }
+
     public function testDiscoversNativeTypesBeforeCrossFileSignaturePreprocessing(): void
     {
         global $translator;
@@ -44,15 +63,15 @@ final class NativeClassValidationTest extends \BaseTest
         $code = file_get_contents($reader);
         self::assertIsString($code);
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardGlobal, "NativeForwardGlobalValue").value',
+            'php::nativeRequireObject(nativeForwardGlobal, "NativeForwardGlobalValue")->value',
             $code,
         );
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardPolymorphic, "NativeForwardBase").value',
+            'php::nativeRequireObject(nativeForwardPolymorphic, "NativeForwardBase")->value',
             $code,
         );
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardCoalesced, "NativeForwardGlobalValue").value',
+            'php::nativeRequireObject(nativeForwardCoalesced, "NativeForwardGlobalValue")->value',
             $code,
         );
         self::assertStringContainsString(
@@ -60,11 +79,11 @@ final class NativeClassValidationTest extends \BaseTest
             $code,
         );
         self::assertMatchesRegularExpression(
-            '/php::nativeDeref\\(tmp_var_\\d+, "NativeForwardGlobalValue"\\)\\.value/',
+            '/php::nativeRequireObject\\(tmp_var_\\d+, "NativeForwardGlobalValue"\\)->value/',
             $code,
         );
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardClosureGlobal, "NativeForwardGlobalValue").value',
+            'php::nativeRequireObject(nativeForwardClosureGlobal, "NativeForwardGlobalValue")->value',
             $code,
         );
         self::assertStringNotContainsString('nativeForwardGlobal.attr(', $code);

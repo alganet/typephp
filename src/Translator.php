@@ -12,6 +12,7 @@ use Ajaxray\AnsiKit\AnsiTerminal;
 use Ajaxray\AnsiKit\Components\Progressbar;
 use MJS\TopSort\Implementations\StringSort;
 use TypePhp\Analysis\LocalClosureAnalyzer;
+use TypePhp\Analysis\NativeObjectStackPromotionAnalyzer;
 use TypePhp\Analysis\SsaBuilder;
 use TypePhp\Backend\CompilerFactory;
 use TypePhp\Build\CompileOptions;
@@ -61,6 +62,7 @@ use TypePhp\Transform\NanoSyntaxValidationVisitor;
 use TypePhp\Transform\VoidCastValidationVisitor;
 use PhpParser\Modifiers;
 use PhpParser\Node;
+use PhpParser\Node\Expr;
 use PhpParser\NodeAbstract;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\NameResolver;
@@ -731,6 +733,7 @@ class Translator extends Preprocessor
         $previousPhase = null;
         try {
             $this->composeTraitDeclarations(array_keys($this->preparedFileAsts));
+            $this->validateNativeObjectMemberNames();
             $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
             if (!$this->declarationExpressionsFinalized) {
                 $this->finalizeDeclarationExpressions(array_keys($this->preparedFileAsts));
@@ -2418,6 +2421,11 @@ CODE;
 
         foreach ($this->symbols->functions() as $name => $func) {
             if ($func->abstractMethod) {
+                continue;
+            }
+            if ($func->method && $this->isNativeObjectClass($func->declaringClass)) {
+                // Native methods are declared directly in their generated C++
+                // class. They deliberately have no php_* free-function ABI.
                 continue;
             }
             $functionDeclarationPrefix = $this->getFunctionDeclarationPrefix($func);
@@ -5455,6 +5463,23 @@ CODE;
             foreach ($optimizedLoopVars as $varName => $type) {
                 $this->context->localVars[$varName] = $type;
             }
+
+            $promotions = (new NativeObjectStackPromotionAnalyzer(
+                fn (Expr\New_ $allocation): ?string => $this->resolveNewExprClass($allocation),
+                fn (string $class): bool => $this->nativeObjectClassCanUseStackStorage($class),
+                fn (string $class, string $method): bool => $this->nativeObjectMethodPreservesReceiver(
+                    $class,
+                    $method,
+                ),
+            ))->analyze($v->stmts);
+            foreach ($promotions as $varName => $promotion) {
+                $escapedName = $this->escapeVarName($varName);
+                $this->context->nativeStackPromotions[$escapedName] = [
+                    'class' => $promotion['class'],
+                    'slot' => $escapedName . '__native_stack_slot',
+                    'allocationId' => spl_object_id($promotion['allocation']),
+                ];
+            }
         }
 
         if ($v->stmts && !$this->class && $this->methodDef === null) {
@@ -5485,9 +5510,17 @@ CODE;
                 ? Type::REF
                 : ($this->getNativeObjectReturnType($this->functionDef) ?? $this->getReturnType()));
         $nativeName = self::PREFIX . $name;
+        $nativeClassMethod = $this->classDef?->nativeObject === true;
         $functionAttribute = $this->getFunctionOptimizationAttribute($this->functionDef);
-        $functionDeclCode = $functionAttribute . $cppReturnType . ' ' . ($multiReturn ? $this->getMultiReturnImplName($name) : $nativeName) . '(';
-        if ($this->class) {
+        if ($nativeClassMethod) {
+            $functionDeclCode = $functionAttribute . $cppReturnType . ' '
+                . $this->getNativeObjectCppName($this->classDef) . '::'
+                . $this->getNativeObjectMethodCppName($this->method) . '(';
+        } else {
+            $functionDeclCode = $functionAttribute . $cppReturnType . ' '
+                . ($multiReturn ? $this->getMultiReturnImplName($name) : $nativeName) . '(';
+        }
+        if ($this->class && !$nativeClassMethod) {
             $functionDeclCode .= ($this->getNativeObjectMethodThisType($this->functionDef)
                 ?? (Type::OBJECT . ' &')) . 'this_';
             if ($this->functionDef->params) {
@@ -5505,7 +5538,10 @@ CODE;
 
         $code = $functionDeclCode . ' {' . PHP_EOL;
         $this->indentLevel++;
-        $preamble = $this->genDegradedArgumentLocals();
+        $preamble = $nativeClassMethod
+            ? $this->getIndent() . 'auto &this_ = *this;' . PHP_EOL
+            : '';
+        $preamble .= $this->genDegradedArgumentLocals();
         $preamble .= $this->genScopeVarDecl();
         $preamble .= $this->genNativeObjectParameterChecks($this->functionDef);
         // Runtime union/nullable parameter type checks
@@ -5546,7 +5582,7 @@ CODE;
         $code .= $stmts;
         $code .= "}\n";
 
-        if ($multiReturn) {
+        if ($multiReturn && !$nativeClassMethod) {
             $forwardArgs = implode(', ', array_map(
                 fn($argInfo) => $this->canConsumeForwardedArgument($argInfo)
                     ? 'php::takeValue(' . $argInfo->name . ')'

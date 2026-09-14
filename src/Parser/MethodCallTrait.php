@@ -477,11 +477,13 @@ trait MethodCallTrait
             if ($nativeFunc === false) {
                 $this->fatalError($expr, "Native parent class `{$parentClass}` has no method `{$method}()`");
             }
-            if ($expr->args === []) {
-                return self::PREFIX . $nativeFunc . '(this_)';
-            }
-            return self::PREFIX . $nativeFunc . '(this_, '
-                . $this->parseNativeCallArgs($expr->args, $nativeFunc) . ')';
+            return 'this_.' . $this->getNativeObjectCppName($parentClass) . '::'
+                . $this->getNativeObjectMethodCppName($method) . '('
+                . $this->parseNativeCallArgs(
+                    $expr->args,
+                    $nativeFunc,
+                    materializeTrailingDefaults: true,
+                ) . ')';
         }
         $staticCall = false;
         if ($this->isIdExpr($expr->name)) {
@@ -748,12 +750,14 @@ trait MethodCallTrait
                         deferTrailingDefaults: true,
                     ) . ')';
                 }
-                $receiver = $this->getNativeObjectReceiver($object);
-                if ($expr->args === []) {
-                    return self::PREFIX . $nativeFunc . '(' . $receiver . ')';
-                }
-                return self::PREFIX . $nativeFunc . '(' . $receiver . ', '
-                    . $this->parseNativeCallArgs($expr->args, $nativeFunc) . ')';
+                $call = $this->getNativeObjectMemberReceiver($object)
+                    . $this->getNativeObjectMethodCppName($methodName);
+                return $call . '('
+                    . $this->parseNativeCallArgs(
+                        $expr->args,
+                        $nativeFunc,
+                        materializeTrailingDefaults: true,
+                    ) . ')';
             }
             // Method calls are allowed on references: use a native call when class info is available, otherwise a dynamic call
             if (!$this->checkArgType($type, Type::OBJECT) and $type !== Type::REF) {

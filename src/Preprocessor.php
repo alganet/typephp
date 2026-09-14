@@ -2744,7 +2744,6 @@ class Preprocessor extends CompilerBase
         if ($this->classDef->nativeObject && ($flags & Modifiers::STATIC)) {
             $this->fatalError($v, 'Native class static methods are not supported');
         }
-
         if (!$abstract) {
             $this->methodDef = new MethodDef($flags, $name);
             $this->methodDef->node = $v;

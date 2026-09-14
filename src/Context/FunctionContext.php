@@ -52,6 +52,14 @@ class FunctionContext
     public array $nonNullNativeObjects = [];
 
     /**
+     * Native Object locals whose allocation is proven not to escape this
+     * function and is therefore backed by a NativeStackSlot instead of Wren.
+     *
+     * @var array<string, array{class: string, slot: string, allocationId: int}>
+     */
+    public array $nativeStackPromotions = [];
+
+    /**
      * Declared object constraints that are not used for native-call dispatch.
      *
      * @var array<string, string>
@@ -163,6 +171,7 @@ class FunctionContext
         $this->objects = [];
         $this->nativeObjects = [];
         $this->nonNullNativeObjects = [];
+        $this->nativeStackPromotions = [];
         $this->declaredObjects = [];
         $this->stdArrays = [];
         $this->stdContainers = [];
@@ -221,6 +230,7 @@ class FunctionContext
         $this->declaredObjects = $declaredObjects;
         $this->nativeObjects = $nativeObjects;
         $this->nonNullNativeObjects = $nonNullNativeObjects;
+        $this->nativeStackPromotions = [];
         $this->beforeStmtLines = [];
         $this->afterStmtLines = [];
         $this->objectProps = [];
