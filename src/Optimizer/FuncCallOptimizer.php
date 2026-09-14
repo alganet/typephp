@@ -1118,10 +1118,10 @@ trait FuncCallOptimizer
                 'Native classes do not support runtime class introspection; use `NativeClass::class`',
             );
         }
-        if ($this->isVarExpr($obj) && $this->isStableObject($obj->name)) {
-            return $this->getLiteralString($this->getObjectType($obj->name));
+        if ($this->isVarExpr($obj) && isset($this->context->exactObjects[$obj->name])) {
+            return $this->getLiteralString($this->context->exactObjects[$obj->name]);
         }
-        return 'php::fn::get_class(' . $this->parseIdentifier($obj) . ')';
+        return false;
     }
 
     protected function genGetParentClass(string $n, Node\Expr\FuncCall $e, array $c): string
