@@ -2163,6 +2163,19 @@ class Preprocessor extends CompilerBase
         // validation (callable as an intersection/DNF member is rejected
         // there, ahead of the property-specific rule, matching Zend).
         [$type, $class] = $this->resolveTypeDecl($typeNode, self::DECL_TYPE_OF_PROPERTY);
+        // Nullable Zend objects use php::Var storage, but their single class
+        // declaration still provides the method signature needed to prepare
+        // by-reference arguments. Keep that metadata without narrowing the
+        // storage type or assuming the runtime value is non-null.
+        if ($typeNode instanceof NullableType && $typeNode->type instanceof Node\Name) {
+            [$nullableType, $nullableClass] = $this->resolveTypeDecl(
+                $typeNode->type,
+                self::DECL_TYPE_OF_PROPERTY,
+            );
+            if ($nullableType === Type::OBJECT) {
+                $class = $nullableClass;
+            }
+        }
         // `callable` is a runtime-context type (a string or array may or may
         // not be callable depending on scope), so Zend forbids it in property
         // types entirely - bare, nullable, or as a union member.

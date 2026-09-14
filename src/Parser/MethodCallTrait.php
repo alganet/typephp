@@ -189,7 +189,14 @@ trait MethodCallTrait
         $classDef = $this->getClass($class);
         while (true) {
             if ($classDef->hasMethod($method) || $classDef->hasAbstractMethod($method)) {
-                return $this->checkAccessible($classDef, $classDef->getMethodFlags($method)) ? $class : '';
+                $flags = $classDef->getMethodFlags($method);
+                // Protected overrides must keep the parent's by-reference
+                // contract even when they widen visibility to public. Private
+                // methods are unrelated declarations and cannot describe a
+                // runtime child method or __call() arguments.
+                return ($flags & Modifiers::PRIVATE) && !$this->checkAccessible($classDef, $flags)
+                    ? ''
+                    : $class;
             }
             if (!$classDef->extends || !$this->hasClass($classDef->extends)) {
                 break;
@@ -619,10 +626,10 @@ trait MethodCallTrait
             $materializedNativeReceiver = true;
         } elseif (($expr->var instanceof Expr\PropertyFetch || $expr->var instanceof Expr\StaticPropertyFetch)
             && $this->isIdExpr($expr->var->name)) {
-            // A non-nullable declared object property supplies a method
-            // signature, but only a final class proves the concrete receiver
-            // needed for a direct native call. Materialize either kind of
-            // property once before arguments (including hook getters).
+            // A declared object property supplies a method signature, but only
+            // a non-nullable final class proves the concrete receiver needed
+            // for a direct native call. Materialize either kind of property
+            // once before arguments (including hook getters).
             $resolvedStaticProperty = false;
             if ($expr->var instanceof Expr\PropertyFetch) {
                 $this->getPropertyIdentifier($expr->var, $expr->var->var, $expr->var->name);
@@ -632,8 +639,8 @@ trait MethodCallTrait
             }
             $property = $this->getNativePropertyDef($expr->var);
             if ($property !== null
-                && $property->type === Type::OBJECT
-                && !$property->nullable
+                && ($property->type === Type::OBJECT
+                    || ($property->nullable && $property->type === Type::VAR))
                 && $property->class !== ''
                 && ($this->hasClass($property->class) || $this->hasInterface($property->class))
                 && !$this->isNativeObjectClass($property->class)
@@ -642,7 +649,7 @@ trait MethodCallTrait
                 $object = $this->parseOrderedOperand($expr->var, false, true);
                 $class = $property->class;
                 $typedPropertyReceiver = true;
-                if ($this->isFinalClass($property->class)) {
+                if (!$property->nullable && $this->isFinalClass($property->class)) {
                     $typedPropertyFinalClass = $property->class;
                 }
             } else {
