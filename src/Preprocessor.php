@@ -161,7 +161,7 @@ class Preprocessor extends CompilerBase
                 continue;
             }
             try {
-                $ast = $this->parser->parse($source);
+                $ast = $this->getAstCache()->load($file, $source);
                 $traverser = new NodeTraverser();
                 $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
                 $ast = $this->requireStatementList($traverser->traverse($ast));
@@ -246,9 +246,9 @@ class Preprocessor extends CompilerBase
         $this->nativeGlobalTypeResolver = $resolver;
         $discovery = new NativeGlobalDiscovery($resolver, $functionReturns);
 
-        foreach ($candidateSources as $source) {
+        foreach ($candidateSources as $file => $source) {
             try {
-                $ast = $this->parser->parse($source);
+                $ast = $this->getAstCache()->load($file, $source);
                 $traverser = new NodeTraverser();
                 $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
                 $ast = $this->requireStatementList($traverser->traverse($ast));
@@ -395,7 +395,7 @@ class Preprocessor extends CompilerBase
 
             $this->climate->info('prepare: ' . $this->getRelativePath($this->file));
             try {
-                $ast = $this->parser->parse($phpCode);
+                $ast = $this->getAstCache()->load($this->file, $phpCode);
             } catch (\PhpParser\Error $e) {
                 $this->climate->red("Fatal error: {$e->getMessage()} in {$this->file}");
                 throw new SyntaxError($e->getMessage(), $e->getCode());

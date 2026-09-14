@@ -3506,7 +3506,7 @@ CODE;
     {
         $this->climate->info('convert: ' . $this->getRelativePath($this->file));
 
-        $ast = $this->parser->parse($phpCode);
+        $ast = $this->getAstCache()->load($this->file, $phpCode);
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
         if ($this->isNanoPolicyMode()) {

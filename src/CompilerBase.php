@@ -9,6 +9,7 @@
 namespace TypePhp;
 
 use TypePhp\Analysis\CompilationStatistics;
+use TypePhp\Build\AstCache;
 use TypePhp\Build\PhpxLocator;
 
 use League\CLImate\CLImate;
@@ -622,6 +623,7 @@ class CompilerBase implements PropertyAccessContext
     protected bool $noProgress = false;
     protected bool $forTest = false;
     protected Parser $parser;
+    protected ?AstCache $astCache = null;
     protected string $phpVersion = self::DEFAULT_PHP_VERSION;
     protected PrettyPrinter $printer;
     protected bool $isPhpZts = false;  // Whether the PHP build is thread-safe (ZTS)
@@ -709,6 +711,7 @@ class CompilerBase implements PropertyAccessContext
         // php-parser's emulative lexer permits the compiler runtime to be
         // older than the selected PHP language version.
         $this->parser = (new ParserFactory())->createForVersion(PhpVersion::fromString($this->phpVersion));
+        $this->astCache = null;
     }
 
     public function getPhpVersion(): string
@@ -5200,6 +5203,12 @@ class CompilerBase implements PropertyAccessContext
             throw new \RuntimeException('Failed to resolve build path: ' . $string);
         }
         $this->buildDir = $resolved;
+        $this->astCache = null;
+    }
+
+    protected function getAstCache(): AstCache
+    {
+        return $this->astCache ??= new AstCache($this->parser, $this->buildDir, $this->phpVersion);
     }
 
     protected function isStubFile(string $file): bool
