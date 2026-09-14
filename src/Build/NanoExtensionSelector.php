@@ -248,8 +248,14 @@ final class NanoExtensionSelector
 
         $dynamic = array_keys($statistics->get(CompilationStatistics::DYNAMIC_CAPABILITIES));
         if ($dynamic !== []) {
+            // Dynamic calls can only imply the built-in Nano surface. Optional
+            // php-src and PIE extensions must still be selected by a statically
+            // observed symbol (or, in the future, explicit project metadata).
+            // Otherwise adding an extension to php-nano silently bloats every
+            // program that contains any dynamic call.
+            $builtIn = array_intersect_key($available, self::EXTENSION_NAMES);
             return new NanoExtensionSelection(
-                array_keys($available),
+                array_keys($builtIn),
                 true,
                 [],
                 array_map(
@@ -396,6 +402,9 @@ final class NanoExtensionSelector
         if (!is_string($extension)) {
             return null;
         }
-        return self::EXTENSION_NAMES[strtolower($extension)] ?? null;
+        $extension = strtolower($extension);
+        return preg_match('/^[a-z][a-z0-9_]*$/', $extension) === 1
+            ? $extension
+            : null;
     }
 }

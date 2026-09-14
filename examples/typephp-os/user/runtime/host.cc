@@ -2,8 +2,10 @@
 #include <typephp_os_abi.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <sys/syscall.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -11,11 +13,6 @@ extern "C" int typephp_nano_project_main();
 extern "C" char **environ;
 
 namespace {
-
-/* Zend MM acquires aligned 2 MiB chunks while PHPX's native object GC also
- * keeps process-lifetime metadata. A 48 MiB arena leaves enough headroom for
- * the complete Nano module startup in the current 512 MiB QEMU machine. */
-constexpr std::uintptr_t arena_size = 48u * 1024u * 1024u;
 
 [[noreturn]] void raw_exit(int status)
 {
@@ -26,6 +23,16 @@ constexpr std::uintptr_t arena_size = 48u * 1024u * 1024u;
 }
 
 } // namespace
+
+/* Override the lightweight C runtime's default arena. Zend MM acquires
+ * aligned 2 MiB chunks while PHPX's native object GC also keeps
+ * process-lifetime metadata. */
+extern "C" {
+std::size_t typephp_os_runtime_arena_size()
+{
+    return 48u * 1024u * 1024u;
+}
+}
 
 extern "C" void typephp_os_write(const char *data, size_t size)
 {
@@ -75,16 +82,31 @@ extern "C" void php_nano_host_sleep(
     }
 }
 
+extern "C" zend_result php_nano_host_random_bytes(void *bytes, std::size_t size)
+{
+    auto *output = static_cast<unsigned char *>(bytes);
+    while (size != 0) {
+        const auto result = getrandom(output, size, 0);
+        if (result <= 0) {
+            return FAILURE;
+        }
+        output += result;
+        size -= static_cast<std::size_t>(result);
+    }
+    return SUCCESS;
+}
+
+extern "C" std::uint64_t php_nano_host_random_seed()
+{
+    std::uint64_t seed = 0;
+    if (php_nano_host_random_bytes(&seed, sizeof(seed)) != SUCCESS) {
+        typephp_os_panic("unable to obtain secure random bytes");
+    }
+    return seed;
+}
+
 int main(int argc, char **argv)
 {
-    const auto begin = static_cast<std::uintptr_t>(syscall(SYS_brk, 0));
-    const auto end = begin + arena_size;
-    if (begin == static_cast<std::uintptr_t>(-1)
-        || end < begin
-        || static_cast<std::uintptr_t>(syscall(SYS_brk, end)) != end) {
-        typephp_os_panic("unable to allocate the Nano runtime arena");
-    }
-    typephp_os_memory_init(reinterpret_cast<void *>(begin), arena_size);
     environ = argv + argc + 1;
     php_nano_set_cli_arguments(argc, argv);
     if (php_nano_startup_composer_extensions() != SUCCESS) {

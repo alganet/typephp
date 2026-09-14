@@ -16,10 +16,12 @@ enum {
     PAGE_PRESENT = 1,
     PAGE_WRITE = 2,
     PAGE_USER = 4,
+    PAGE_CACHE_DISABLE = 16,
     PAGE_HUGE = 128,
     PAGE_OWNED = 512,
     USER_FIRST_PDE = 0,
     USER_LAST_PDE = 127,
+    MMIO_PDP_INDEX = 4,
 };
 
 #define PAGE_NX (UINT64_C(1) << 63)
@@ -29,6 +31,12 @@ enum {
 
 extern uint64_t physical_page_allocate(void);
 extern void physical_page_free(uint64_t page);
+
+static uint64_t mmio_pd_page;
+static uint64_t mmio_physical_base;
+
+#define MMIO_VIRTUAL_BASE UINT64_C(0x100000000)
+#define HUGE_PAGE_SIZE UINT64_C(0x200000)
 
 static uint64_t *page_table(uint64_t physical)
 {
@@ -85,11 +93,45 @@ uint64_t typephp_vm_create(void)
     pml4[0] = pdp_page | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     pdp[0] = kernel_pd_page | PAGE_PRESENT | PAGE_WRITE;
     pdp[1] = user_pd_page | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    if (mmio_pd_page != 0) {
+        pdp[MMIO_PDP_INDEX] = mmio_pd_page | PAGE_PRESENT | PAGE_WRITE;
+    }
     for (uint64_t index = 0; index < 512; ++index) {
         kernel_pd[index] = index * UINT64_C(0x200000)
             | PAGE_PRESENT | PAGE_WRITE | PAGE_HUGE;
     }
     return pml4_page;
+}
+
+void *typephp_vm_map_mmio(uint64_t physical_address, uint64_t size)
+{
+    const uint64_t physical_base = physical_address & ~(HUGE_PAGE_SIZE - 1);
+    const uint64_t offset = physical_address - physical_base;
+    if (size == 0 || size > HUGE_PAGE_SIZE || offset > HUGE_PAGE_SIZE - size) {
+        return 0;
+    }
+    if (mmio_pd_page == 0) {
+        mmio_pd_page = physical_page_allocate();
+        if (mmio_pd_page == 0) {
+            return 0;
+        }
+        memset(page_table(mmio_pd_page), 0, PAGE_SIZE);
+        mmio_physical_base = physical_base;
+        page_table(mmio_pd_page)[0] = physical_base | PAGE_PRESENT
+            | PAGE_WRITE | PAGE_CACHE_DISABLE | PAGE_HUGE;
+    } else if (mmio_physical_base != physical_base) {
+        return 0;
+    }
+
+    const uint64_t address_space = typephp_vm_current();
+    uint64_t *pml4 = page_table(address_space);
+    if ((pml4[0] & PAGE_PRESENT) == 0) {
+        return 0;
+    }
+    uint64_t *pdp = page_table(pml4[0]);
+    pdp[MMIO_PDP_INDEX] = mmio_pd_page | PAGE_PRESENT | PAGE_WRITE;
+    typephp_vm_activate(address_space);
+    return (void *) (uintptr_t) (MMIO_VIRTUAL_BASE + offset);
 }
 
 void typephp_vm_activate(uint64_t address_space)

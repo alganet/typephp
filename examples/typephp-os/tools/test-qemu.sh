@@ -7,13 +7,32 @@ disk=${2:?FAT16 disk image is required}
 log=${3:?log path is required}
 
 qemu_disk=$(mktemp /tmp/typephp-os-qemu.XXXXXX.img)
-trap 'rm -f "${qemu_disk}"' EXIT
+http_log="${log}.http-server"
+python3 -m http.server 18080 --bind 127.0.0.1 \
+    --directory "$(dirname -- "$0")" >"${http_log}" 2>&1 &
+http_pid=$!
+cleanup() {
+    kill "${http_pid}" 2>/dev/null || true
+    wait "${http_pid}" 2>/dev/null || true
+    rm -f "${qemu_disk}"
+}
+trap cleanup EXIT
 cp "${disk}" "${qemu_disk}"
 
-if timeout 35 qemu-system-x86_64 \
-        -m 512M \
+sleep 0.2
+if ! kill -0 "${http_pid}" 2>/dev/null; then
+    cat "${http_log}"
+    echo "failed to start the host HTTP smoke server" >&2
+    exit 1
+fi
+
+if timeout 60 qemu-system-x86_64 \
+		-cpu max \
+		-m 512M \
         -kernel "${kernel}" \
         -drive file="${qemu_disk}",format=raw,if=ide,index=0 \
+        -netdev user,id=net0 \
+        -device e1000,netdev=net0 \
         -display none \
         -serial stdio \
         -monitor none \
@@ -21,7 +40,7 @@ if timeout 35 qemu-system-x86_64 \
         -no-shutdown \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
         >"${log}" 2>&1 \
-        <<< $'\ndate\nuname\nuname -a\nfree\necho Hello TypePHP userspace\nhello Dynamically loaded\ntnhello alpha beta\nsystest\nbuiltins\nmissing\nbad\nls /BIN\ncat HELLO.TXT\ntouch /EXPAND/F62.TXT\nls /EXPAND\nwrite NOTE.TXT Hello from Ring 3\ncat NOTE.TXT\ntouch EMPTY.TXT\nmkdir TMP\nls\nrm NOTE.TXT\ncat NOTE.TXT\nrmdir TMP\ncd TMP\nmkdir WORK\ncd WORK\nwrite NOTE.TXT Nested directory write\ncat NOTE.TXT\nmkdir SUB\ncd SUB\nwrite DEEP.TXT Deep directory write\nmv DEEP.TXT MOVED.TXT\ncat MOVED.TXT\ncat DEEP.TXT\npwd\ncd ..\nrmdir SUB\nrm SUB/MOVED.TXT\nrmdir SUB\nls\nrm NOTE.TXT\ncd ..\nrmdir WORK\ncd WORK\nmemtest\nfault\nvmfault\nwrfault\ndate\npwd\ncd BIN\npwd\nls\ncd ..\ncd DOCS\npwd\nls\ncd ..\nls\n'; then
+        <<< $'\ndate\nuname\nuname -a\nfree\necho Hello TypePHP userspace\nhello Dynamically loaded\ntnhello alpha beta\nsystest\nnettest\nbuiltins\nhttps\nmissing\nbad\nls /BIN\ncat HELLO.TXT\ntouch /EXPAND/F62.TXT\nls /EXPAND\nwrite NOTE.TXT Hello from Ring 3\ncat NOTE.TXT\ntouch EMPTY.TXT\nmkdir TMP\nls\nrm NOTE.TXT\ncat NOTE.TXT\nrmdir TMP\ncd TMP\nmkdir WORK\ncd WORK\nwrite NOTE.TXT Nested directory write\ncat NOTE.TXT\nmkdir SUB\ncd SUB\nwrite DEEP.TXT Deep directory write\nmv DEEP.TXT MOVED.TXT\ncat MOVED.TXT\ncat DEEP.TXT\npwd\ncd ..\nrmdir SUB\nrm SUB/MOVED.TXT\nrmdir SUB\nls\nrm NOTE.TXT\ncd ..\nrmdir WORK\ncd WORK\nmemtest\nfault\nvmfault\nwrfault\ndate\npwd\ncd BIN\npwd\nls\ncd ..\ncd DOCS\npwd\nls\ncd ..\nls\n'; then
     status=0
 else
     status=$?
@@ -51,7 +70,7 @@ grep -q "Prime list: 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53,
 grep -q "Process 1: sh.elf (Ring 3)" "${log}"
 grep -q "TypePHP-OS user shell" "${log}"
 grep -q "Ring 3 confirmed" "${log}"
-grep -q "Commands: ls, cd, pwd, date, uname, free, cat, echo, write, touch, mkdir, rm, rmdir, mv, memtest, systest, builtins, fault, vmfault, wrfault" "${log}"
+grep -q "Commands: ls, cd, pwd, date, uname, free, cat, echo, write, touch, mkdir, rm, rmdir, mv, memtest, systest, nettest, builtins, tnhello, https, fault, vmfault, wrfault" "${log}"
 grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} UTC' "${log}"
 grep -Fq $'TypePHP-OS\r' "${log}"
 grep -Fq $'TypePHP-OS typephp-os 0.1 TypePHP Nano user mode x86_64\r' "${log}"
@@ -75,6 +94,14 @@ if [[ $(grep -c '^bool(true)' "${log}") -lt 3 ]]; then
     exit 1
 fi
 grep -q '^basic syscalls: OK' "${log}"
+grep -q '^TCP HTTP socket: OK' "${log}"
+grep -q '^lwIP DNS: OK' "${log}"
+grep -q '^CSPRNG: OK' "${log}"
+grep -q '^GET https://httpcan.org/get' "${log}"
+grep -q '^HTTP status: 200' "${log}"
+grep -q '^HTTP version: 2' "${log}"
+grep -q '^TLS backend: OpenSSL/' "${log}"
+grep -q '^OpenSSL SHA-256: ' "${log}"
 grep -q '^compiler-rt builtins: OK' "${log}"
 if grep -q 'unsupported TypePHP-OS user ABI' "${log}"; then
     echo "the Nano smoke program reached an unsupported userspace ABI" >&2

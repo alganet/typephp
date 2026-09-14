@@ -42,9 +42,21 @@ final class NanoSourceComposer
         }
         $packages = array_values($packagesByName);
 
+        $availableExtensions = [];
+        foreach ($packages as $package) {
+            if ($package->extensionName !== null) {
+                $availableExtensions[] = $package->extensionName;
+            }
+            foreach ($package->components as $component) {
+                $availableExtensions[] = $component->extension;
+            }
+        }
         $selection = $statistics === null
             ? null
-            : (new NanoExtensionSelector())->select($statistics);
+            : (new NanoExtensionSelector())->select(
+                $statistics,
+                array_values(array_unique($availableExtensions)),
+            );
         $activeComponents = $selection === null
             ? null
             : $this->selectComponents($packages, $selection);
@@ -178,6 +190,18 @@ final class NanoSourceComposer
             }
         }
         foreach ($extensions as $extension) {
+            if ($activeComponents !== null && $extension->components !== []) {
+                $packageActive = false;
+                foreach ($extension->components as $component) {
+                    if (isset($activeComponents[$extension->name][$component->name])) {
+                        $packageActive = true;
+                        break;
+                    }
+                }
+                if (!$packageActive) {
+                    continue;
+                }
+            }
             $moduleEntry = $extension->extensionModuleEntry;
             $declarations[$moduleEntry] = "extern \"C\" zend_module_entry {$moduleEntry};";
             $entries[$moduleEntry] = "    &{$moduleEntry},";

@@ -11,6 +11,8 @@
 #include "typephp_os_memory.h"
 #include "typephp_os_syscall.h"
 #include "vm.h"
+#include "socket.h"
+#include "net/network.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -241,6 +243,11 @@ uint64_t typephp_os_syscall_user_rsp;
 static process_state foreground_process = {.pid = 1, .cwd = "/"};
 static volatile uint64_t timer_ticks;
 
+uint64_t typephp_os_timer_milliseconds(void)
+{
+    return timer_ticks * (1000u / TIMER_FREQUENCY);
+}
+
 enum {
     IA32_EFER = 0xc0000080u,
     IA32_STAR = 0xc0000081u,
@@ -350,6 +357,61 @@ static size_t bounded_user_string(const char *string, size_t maximum)
         ++length;
     }
     return length < maximum && user_buffer(string + length, 1) ? length : (size_t) -1;
+}
+
+static int cpu_has_rdrand(void)
+{
+    uint32_t eax;
+    uint32_t ebx;
+    uint32_t ecx;
+    uint32_t edx;
+    __asm__ volatile("cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "a"(1u), "c"(0u));
+    (void) eax;
+    (void) ebx;
+    (void) edx;
+    return (ecx & (1u << 30u)) != 0;
+}
+
+static int cpu_random_u64(uint64_t *value)
+{
+    unsigned char valid;
+    int attempt;
+    for (attempt = 0; attempt < 16; ++attempt) {
+        __asm__ volatile("rdrand %0; setc %1"
+            : "=r"(*value), "=qm"(valid));
+        if (valid) {
+            return 1;
+        }
+        __asm__ volatile("pause");
+    }
+    return 0;
+}
+
+static long syscall_getrandom(void *buffer, size_t size, unsigned int flags)
+{
+    unsigned char *output = (unsigned char *) buffer;
+    if ((flags & ~1u) != 0) {
+        return -EINVAL;
+    }
+    if (!user_buffer(buffer, size)) {
+        return -EFAULT;
+    }
+    if (!cpu_has_rdrand()) {
+        return -ENOSYS;
+    }
+    while (size != 0) {
+        uint64_t random;
+        const size_t chunk = size < sizeof(random) ? size : sizeof(random);
+        if (!cpu_random_u64(&random)) {
+            return -EAGAIN;
+        }
+        memcpy(output, &random, chunk);
+        output += chunk;
+        size -= chunk;
+    }
+    return (long) (output - (unsigned char *) buffer);
 }
 
 static void install_tss_descriptor(uint64_t base, uint32_t limit)
@@ -1208,6 +1270,7 @@ static long syscall_exit(syscall_frame *frame, long status)
         typephp_os_panic("shell process exited\n");
     }
     child_address_space = foreground_process.address_space;
+    typephp_socket_close_owner(foreground_process.pid);
     memcpy(frame, &foreground_process.parent_frame, sizeof(*frame));
     foreground_process.address_space = foreground_process.parent_address_space;
     foreground_process.program_break = foreground_process.parent_program_break;
@@ -1272,6 +1335,7 @@ static void restore_shell_after_fault(exception_frame *frame)
     uint64_t child_address_space = foreground_process.address_space;
     syscall_frame *parent = &foreground_process.parent_frame;
     /* The general-register prefixes of both frame formats are identical. */
+    typephp_socket_close_owner(foreground_process.pid);
     memcpy(frame, parent, offsetof(syscall_frame, rip));
     frame->rax = (uint64_t) -EIO;
     frame->rip = parent->rip;
@@ -1352,6 +1416,10 @@ long typephp_os_syscall_dispatch(syscall_frame *frame)
         if (frame->rdi <= STDERR_FILENO) {
             return -EBADF;
         }
+        if (typephp_socket_is_fd((int) frame->rdi)) {
+            return typephp_socket_read(
+                (int) frame->rdi, (void *) frame->rsi, frame->rdx);
+        }
         return posix_syscall_result(read(
             (int) frame->rdi, (void *) frame->rsi, frame->rdx));
     case TYPEPHP_SYS_WRITE:
@@ -1365,9 +1433,16 @@ long typephp_os_syscall_dispatch(syscall_frame *frame)
         if (frame->rdi == STDIN_FILENO) {
             return -EBADF;
         }
+        if (typephp_socket_is_fd((int) frame->rdi)) {
+            return typephp_socket_write(
+                (int) frame->rdi, (const void *) frame->rsi, frame->rdx);
+        }
         return posix_syscall_result(write(
             (int) frame->rdi, (const void *) frame->rsi, frame->rdx));
     case TYPEPHP_SYS_CLOSE:
+        if (typephp_socket_is_fd((int) frame->rdi)) {
+            return typephp_socket_close((int) frame->rdi);
+        }
         return posix_syscall_result(close((int) frame->rdi));
     case TYPEPHP_SYS_STAT:
         return syscall_stat_path((const char *) frame->rdi,
@@ -1402,8 +1477,91 @@ long typephp_os_syscall_dispatch(syscall_frame *frame)
     case TYPEPHP_SYS_GETTID:
         return (long) foreground_process.pid;
     case TYPEPHP_SYS_FCNTL:
+        if (typephp_socket_is_fd((int) frame->rdi)) {
+            return typephp_socket_fcntl(
+                (int) frame->rdi, (int) frame->rsi, (long) frame->rdx);
+        }
         return posix_syscall_result(fcntl(
             (int) frame->rdi, (int) frame->rsi, (int) frame->rdx));
+    case TYPEPHP_SYS_SOCKET:
+        return typephp_socket_open(foreground_process.pid,
+            (int) frame->rdi, (int) frame->rsi, (int) frame->rdx);
+    case TYPEPHP_SYS_CONNECT:
+        if (!user_buffer((const void *) frame->rsi, frame->rdx)) {
+            return -EFAULT;
+        }
+        return typephp_socket_connect((int) frame->rdi,
+            (const void *) frame->rsi, (typephp_socklen_t) frame->rdx);
+    case TYPEPHP_SYS_BIND:
+        if (!user_buffer((const void *) frame->rsi, frame->rdx)) {
+            return -EFAULT;
+        }
+        return typephp_socket_bind((int) frame->rdi,
+            (const void *) frame->rsi, (typephp_socklen_t) frame->rdx);
+    case TYPEPHP_SYS_SENDTO:
+        if (!user_buffer((const void *) frame->rsi, frame->rdx)
+            || (frame->r8 != 0
+                && !user_buffer((const void *) frame->r8, frame->r9))) {
+            return -EFAULT;
+        }
+        return typephp_socket_sendto((int) frame->rdi,
+            (const void *) frame->rsi, frame->rdx, (int) frame->r10,
+            (const void *) frame->r8, (typephp_socklen_t) frame->r9);
+    case TYPEPHP_SYS_RECVFROM:
+        if (!user_buffer((void *) frame->rsi, frame->rdx)
+            || (frame->r8 != 0
+                && (!user_buffer((void *) frame->r8, sizeof(uint16_t))
+                    || frame->r9 == 0
+                    || !user_buffer((void *) frame->r9,
+                        sizeof(typephp_socklen_t))))) {
+            return -EFAULT;
+        }
+        return typephp_socket_recvfrom((int) frame->rdi,
+            (void *) frame->rsi, frame->rdx, (int) frame->r10,
+            (void *) frame->r8, (typephp_socklen_t *) frame->r9);
+    case TYPEPHP_SYS_SHUTDOWN:
+        return typephp_socket_shutdown((int) frame->rdi, (int) frame->rsi);
+    case TYPEPHP_SYS_GETSOCKNAME:
+    case TYPEPHP_SYS_GETPEERNAME:
+        if (frame->rdx == 0
+            || !user_buffer((void *) frame->rdx, sizeof(typephp_socklen_t))) {
+            return -EFAULT;
+        }
+        if (frame->rsi != 0
+            && !user_buffer((void *) frame->rsi,
+                *(typephp_socklen_t *) frame->rdx)) {
+            return -EFAULT;
+        }
+        return typephp_socket_getname((int) frame->rdi,
+            (void *) frame->rsi, (typephp_socklen_t *) frame->rdx,
+            frame->rax == TYPEPHP_SYS_GETPEERNAME);
+    case TYPEPHP_SYS_SETSOCKOPT:
+        if (!user_buffer((const void *) frame->r10, frame->r8)) {
+            return -EFAULT;
+        }
+        return typephp_socket_setsockopt((int) frame->rdi,
+            (int) frame->rsi, (int) frame->rdx,
+            (const void *) frame->r10, (typephp_socklen_t) frame->r8);
+    case TYPEPHP_SYS_GETSOCKOPT:
+        if (frame->r8 == 0
+            || !user_buffer((void *) frame->r8, sizeof(typephp_socklen_t))) {
+            return -EFAULT;
+        }
+        if (!user_buffer((void *) frame->r10,
+            *(typephp_socklen_t *) frame->r8)) {
+            return -EFAULT;
+        }
+        return typephp_socket_getsockopt((int) frame->rdi,
+            (int) frame->rsi, (int) frame->rdx,
+            (void *) frame->r10, (typephp_socklen_t *) frame->r8);
+    case TYPEPHP_SYS_POLL:
+        if (frame->rsi > 1024
+            || !user_buffer((void *) frame->rdi,
+                frame->rsi * sizeof(typephp_pollfd))) {
+            return -EFAULT;
+        }
+        return typephp_socket_poll((typephp_pollfd *) frame->rdi,
+            frame->rsi, (int) frame->rdx);
     case TYPEPHP_SYS_SPAWN:
         return syscall_spawn(frame, (const char *const *) frame->rdi);
     case TYPEPHP_SYS_GETCWD:
@@ -1491,6 +1649,24 @@ long typephp_os_syscall_dispatch(syscall_frame *frame)
         return syscall_access_path((int) frame->rdi,
             (const char *) frame->rsi, (int) frame->rdx,
             (int) frame->r10);
+    case TYPEPHP_SYS_GETRANDOM:
+        return syscall_getrandom((void *) frame->rdi, frame->rsi,
+            (unsigned int) frame->rdx);
+    case TYPEPHP_SYS_DNS_RESOLVE_IPV4: {
+        char hostname[256];
+        size_t length;
+        if (!user_buffer((void *) frame->rsi, sizeof(uint32_t))) {
+            return -EFAULT;
+        }
+        length = bounded_user_string((const char *) frame->rdi,
+            sizeof(hostname));
+        if (length == (size_t) -1) {
+            return -EFAULT;
+        }
+        memcpy(hostname, (const void *) frame->rdi, length + 1u);
+        return typephp_network_resolve_ipv4(hostname,
+            (uint32_t *) frame->rsi);
+    }
     case TYPEPHP_SYS_EXIT:
     case TYPEPHP_SYS_EXIT_GROUP:
         return syscall_exit(frame, (long) frame->rdi);
@@ -1522,6 +1698,13 @@ void typephp_os_process_start(void)
         panic("unable to load /BIN/SH.ELF\n");
     }
     install_descriptor_tables();
+    if (typephp_network_init()) {
+        typephp_os_write("Network: e1000/lwIP IPv4 ready\n",
+            sizeof("Network: e1000/lwIP IPv4 ready\n") - 1);
+    } else {
+        typephp_os_write("Network: no supported adapter\n",
+            sizeof("Network: no supported adapter\n") - 1);
+    }
     foreground_process.running = 1;
     foreground_process.address_space = address_space;
     foreground_process.minimum_break = image_end;

@@ -7,12 +7,14 @@ PAYLOAD_BIN := $(BUILD)/kernel64.bin
 PAYLOAD_OBJECT := $(OBJECT_DIR)/kernel64-payload.o
 KERNEL := $(BUILD)/typephp-os.elf
 DISK := $(BUILD)/typephp-os.img
-USER_COMMANDS := ls cd date uname pwd cat echo write touch mkdir rm rmdir mv fault vmfault wrfault memtest systest builtins
+USER_COMMANDS := ls cd date uname pwd cat echo write touch mkdir rm rmdir mv fault vmfault wrfault memtest systest nettest builtins
 USER_PROGRAMS := sh $(USER_COMMANDS)
 USER_SH_ELF := $(BUILD)/sh.elf
 USER_COMMAND_ELFS := $(addprefix $(BUILD)/,$(addsuffix .elf,$(USER_COMMANDS)))
 NANO_USER_ELF := $(BUILD)/tnhello.elf
 TYPEPHP_FREE_ELF := $(BUILD)/free.elf
+TYPEPHP_HTTPS_ELF := $(BUILD)/https.elf
+CA_BUNDLE ?= /etc/ssl/certs/ca-certificates.crt
 TYPEPHP_OS_LIBRARY := $(BUILD)/libtypephp-os.a
 TYPEPHP_OS_LIBRARY_OBJECT_DIR := $(BUILD)/libtypephp-os
 COMPILER_RT_LIBRARY := $(BUILD)/libcompiler-rt-builtins.a
@@ -23,7 +25,9 @@ OPENLIBM_SOURCES := $(shell sed -n 's|^\(.*\.c\)$$|thirdparty/openlibm/\1|p' too
 COMPILER_RT_SOURCES := $(shell awk '$$2 ~ /\.c$$/ { print "thirdparty/compiler-rt/" $$2 }' tools/compiler-rt-builtins-files.sha256)
 COMPILER_RT_OBJECTS := $(patsubst thirdparty/compiler-rt/lib/builtins/%.c,$(COMPILER_RT_OBJECT_DIR)/%.o,$(COMPILER_RT_SOURCES))
 TYPEPHP_OS_LIBRARY_C_SOURCES := user/runtime/posix.c user/runtime/dirent.c \
-	user/runtime/fcntl.c user/runtime/ioctl.c kernel/core/abi/error.c kernel/core/abi/string.c \
+	user/runtime/fcntl.c user/runtime/ioctl.c user/runtime/network.c \
+	user/runtime/glibc.c user/runtime/stdio.c user/runtime/start.c \
+	kernel/core/abi/error.c kernel/core/abi/string.c \
 	user/runtime/memory.c kernel/core/abi/libc.c $(OPENLIBM_SOURCES)
 TYPEPHP_OS_LIBRARY_CXX_SOURCES := user/runtime/host.cc kernel/core/abi/cxx.cpp
 TYPEPHP_OS_LIBRARY_ASM_SOURCES := user/runtime/crt0.S user/runtime/syscall.S \
@@ -39,6 +43,9 @@ NANO_USER_SOURCES := user/nano/hello.php user/nano/hello.yml user/runtime/linker
 TYPEPHP_FREE_SOURCES := user/nano/free.php user/nano/memory.stub.php \
 	user/nano/free.cc user/nano/free.yml user/runtime/linker.ld \
 	$(TYPEPHP_OS_LIBRARY) $(COMPILER_RT_LIBRARY)
+TYPEPHP_HTTPS_SOURCES := user/nano/https.php user/nano/https.yml \
+	user/runtime/linker.ld $(TYPEPHP_OS_LIBRARY) $(COMPILER_RT_LIBRARY)
+TPC := ./vendor/bin/tpc.php
 
 BOOTFLAGS := -m32 -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -ffreestanding -fno-pic -fno-pie \
 	-fno-stack-protector -Wall -Wextra
@@ -84,7 +91,7 @@ define STRIP_ELF
 	objcopy --add-gnu-debuglink=$(1).debug $(1)
 endef
 
-.PHONY: all thirdparty thirdparty-smoke compiler-rt-builtins payload objects user-runtime nano-user disk run test clean
+.PHONY: all thirdparty thirdparty-smoke network-thirdparty-smoke compiler-rt-builtins payload objects user-runtime nano-user disk run test clean
 
 all: $(KERNEL) $(DISK)
 
@@ -94,10 +101,13 @@ thirdparty:
 thirdparty-smoke: thirdparty compiler-rt-builtins
 	./tools/test-thirdparty.sh
 
+network-thirdparty-smoke:
+	./tools/build-network-thirdparty.sh
+
 compiler-rt-builtins: $(COMPILER_RT_LIBRARY)
 
 payload: thirdparty objects $(COMPILER_RT_LIBRARY)
-	cd ../.. && ./bin/tpc.php --nano examples/typephp-os/project.yml
+	$(TPC) --nano project.yml
 	$(call STRIP_ELF,$(PAYLOAD_ELF))
 
 # Startup sources are built explicitly by Make. The 64-bit entry object is
@@ -107,11 +117,11 @@ objects: $(BOOTSTRAP_OBJECT) $(KERNEL64_ENTRY_OBJECT)
 
 user-runtime: $(TYPEPHP_OS_LIBRARY)
 
-nano-user: $(TYPEPHP_OS_LIBRARY) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF)
+nano-user: $(TYPEPHP_OS_LIBRARY) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF) $(TYPEPHP_HTTPS_ELF)
 
 disk: $(DISK)
 
-$(DISK): $(USER_SH_ELF) $(USER_COMMAND_ELFS) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF) | $(BUILD)
+$(DISK): $(USER_SH_ELF) $(USER_COMMAND_ELFS) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF) $(TYPEPHP_HTTPS_ELF) | $(BUILD)
 	truncate -s 32M $@
 	mkfs.fat -F 16 -n TYPEPHPOS $@
 	mmd -i $@ ::/BIN
@@ -120,6 +130,8 @@ $(DISK): $(USER_SH_ELF) $(USER_COMMAND_ELFS) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF
 	done
 	mcopy -o -i $@ $(NANO_USER_ELF) ::/BIN/TNHELLO.ELF
 	mcopy -o -i $@ $(TYPEPHP_FREE_ELF) ::/BIN/FREE.ELF
+	mcopy -o -i $@ $(TYPEPHP_HTTPS_ELF) ::/BIN/HTTPS.ELF
+	mcopy -o -i $@ $(CA_BUNDLE) ::/CACERT.PEM
 
 $(BUILD):
 	mkdir -p $@
@@ -151,6 +163,10 @@ $(TYPEPHP_OS_LIBRARY_OBJECT_DIR)/%.o: %.c Makefile
 	@mkdir -p $(@D)
 	gcc $(TYPEPHP_OS_RUNTIME_CFLAGS) -MMD -MP -MF $@.d -c $< -o $@
 
+$(TYPEPHP_OS_LIBRARY_OBJECT_DIR)/user/runtime/network.o: user/runtime/network.c Makefile $(USER_HEADERS)
+	@mkdir -p $(@D)
+	gcc -Iuser/include $(TYPEPHP_OS_RUNTIME_CFLAGS) -MMD -MP -MF $@.d -c $< -o $@
+
 $(TYPEPHP_OS_LIBRARY_OBJECT_DIR)/%.o: %.cc Makefile
 	@mkdir -p $(@D)
 	g++ $(TYPEPHP_OS_RUNTIME_CXXFLAGS) -MMD -MP -MF $@.d -c $< -o $@
@@ -167,11 +183,15 @@ $(TYPEPHP_OS_LIBRARY): $(TYPEPHP_OS_LIBRARY_OBJECTS) | $(BUILD)
 	$(AR) $(ARFLAGS) $@ $^
 
 $(NANO_USER_ELF): $(NANO_USER_SOURCES) | thirdparty $(BUILD)
-	cd ../.. && ./bin/tpc.php --nano examples/typephp-os/user/nano/hello.yml
+	$(TPC) --nano user/nano/hello.yml
 	$(call STRIP_ELF,$@)
 
 $(TYPEPHP_FREE_ELF): $(TYPEPHP_FREE_SOURCES) | thirdparty $(BUILD)
-	cd ../.. && ./bin/tpc.php --nano examples/typephp-os/user/nano/free.yml
+	$(TPC) --nano user/nano/free.yml
+	$(call STRIP_ELF,$@)
+
+$(TYPEPHP_HTTPS_ELF): $(TYPEPHP_HTTPS_SOURCES) | network-thirdparty-smoke thirdparty $(BUILD)
+	$(TPC) --nano user/nano/https.yml
 	$(call STRIP_ELF,$@)
 
 $(USER_SH_ELF): $(OBJECT_DIR)/sh.o $(TYPEPHP_OS_LIBRARY) $(COMPILER_RT_LIBRARY) user/runtime/linker.ld Makefile | $(BUILD)
@@ -194,11 +214,12 @@ $(KERNEL): payload
 	$(call STRIP_ELF,$@)
 
 run: all
-	qemu-system-x86_64 -m 512M -kernel $(KERNEL) \
+	qemu-system-x86_64 -cpu max -m 512M -kernel $(KERNEL) \
 		-drive file=$(DISK),format=raw,if=ide,index=0 \
+		-netdev user,id=net0 -device e1000,netdev=net0 \
 		-display none -serial stdio -monitor none -no-reboot -no-shutdown
 
-test: $(KERNEL) $(USER_SH_ELF) $(USER_COMMAND_ELFS) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF)
+test: $(KERNEL) $(USER_SH_ELF) $(USER_COMMAND_ELFS) $(NANO_USER_ELF) $(TYPEPHP_FREE_ELF) $(TYPEPHP_HTTPS_ELF)
 	truncate -s 32M $(DISK)
 	mkfs.fat -F 16 -n TYPEPHPOS $(DISK)
 	mmd -i $(DISK) ::/BIN
@@ -207,6 +228,8 @@ test: $(KERNEL) $(USER_SH_ELF) $(USER_COMMAND_ELFS) $(NANO_USER_ELF) $(TYPEPHP_F
 	done
 	mcopy -o -i $(DISK) $(NANO_USER_ELF) ::/BIN/TNHELLO.ELF
 	mcopy -o -i $(DISK) $(TYPEPHP_FREE_ELF) ::/BIN/FREE.ELF
+	mcopy -o -i $(DISK) $(TYPEPHP_HTTPS_ELF) ::/BIN/HTTPS.ELF
+	mcopy -o -i $(DISK) $(CA_BUNDLE) ::/CACERT.PEM
 	# An alias not known while linking the kernel verifies disk-based discovery.
 	mcopy -o -i $(DISK) $(BUILD)/echo.elf ::/BIN/hello.elf
 	mcopy -o -i $(DISK) tools/invalid-elf.txt ::/BIN/bad.elf

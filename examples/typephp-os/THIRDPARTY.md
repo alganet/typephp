@@ -26,10 +26,45 @@ Run the upstream integration probes separately:
 
 ```shell
 make thirdparty-smoke
+make network-thirdparty-smoke
 ```
 
 This target builds a deliberately small hosted Toybox and audits its undefined
 ABI. It is not installed into the TypePHP-OS disk image by this probe.
+
+The network probe builds a static, protocol-minimal dependency stack under
+`build/network-thirdparty/install`. It verifies that libcurl exposes exactly
+`HTTP` and `HTTPS`, with HTTP/2 supplied by nghttp2. This hosted build locks
+down the upstream feature selection while the same sources are being ported to
+the freestanding TypePHP-OS userspace ABI.
+
+## lwIP
+
+- Upstream: <https://github.com/lwip-tcpip/lwip>
+- Version: `STABLE-2_2_1_RELEASE`
+- Archive SHA-256: `ce0b7461c0ad9602c376f0bf07c5eb7253b48c7bf66f011c6bf3e2a96731c539`
+
+The complete release tree is fetched, but `project.yml` selects only the raw
+IPv4/TCP, ARP, ICMP, UDP/DNS, timeout, and Ethernet sources used by the kernel.
+The lwIP socket-compatibility and netconn layers are not compiled.
+
+## HTTPS and HTTP/2 userspace stack
+
+- OpenSSL `3.5.8` LTS, archive SHA-256
+  `a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2`
+- nghttp2 `1.70.0`, archive SHA-256
+  `e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2`
+- curl `8.22.0`, archive SHA-256
+  `f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7`
+
+All three are static userspace libraries. OpenSSL keeps TLS 1.2/1.3, X.509,
+and the modern algorithms needed for public HTTPS servers, while omitting its
+apps, tests, dynamic modules, legacy provider, QUIC/DTLS, and old TLS protocol
+versions. nghttp2 builds only its C library. Only libcurl is built; the curl
+command-line tool is excluded. libcurl enables only HTTP/HTTPS and
+HTTP/2; FTP, FILE, IPFS, mail, LDAP, SMB, MQTT, WebSocket, proxy, compression,
+IDN, PSL, and other optional dependencies are disabled. Redirect handling,
+cookies, MIME, headers, and ordinary HTTP authentication remain available.
 
 ## OpenLibm
 

@@ -14,6 +14,7 @@ uint64_t typephp_vm_create(void);
 void typephp_vm_destroy(uint64_t address_space);
 void typephp_vm_activate(uint64_t address_space);
 uint64_t typephp_vm_current(void);
+void *typephp_vm_map_mmio(uint64_t physical_address, uint64_t size);
 int typephp_vm_map_user(
     uint64_t address_space, uint64_t address, uint64_t size, unsigned int flags);
 int typephp_vm_user_range(

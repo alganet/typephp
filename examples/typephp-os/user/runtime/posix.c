@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -152,6 +153,29 @@ unsigned int sleep(unsigned int seconds)
 int nanosleep(const struct timespec *duration, struct timespec *remaining)
 {
     return (int) syscall(TYPEPHP_SYS_NANOSLEEP, duration, remaining);
+}
+
+ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
+{
+    return (ssize_t) syscall(TYPEPHP_SYS_GETRANDOM, buffer, length, flags);
+}
+
+int getentropy(void *buffer, size_t length)
+{
+    unsigned char *output = (unsigned char *) buffer;
+    if (length > 256) {
+        errno = EIO;
+        return -1;
+    }
+    while (length != 0) {
+        ssize_t result = getrandom(output, length, 0);
+        if (result <= 0) {
+            return -1;
+        }
+        output += result;
+        length -= (size_t) result;
+    }
+    return 0;
 }
 
 int uname(struct utsname *value)

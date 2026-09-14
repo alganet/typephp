@@ -18,6 +18,9 @@ defines:
   - PHPX_NO_RTTI=1
   - PHP_NANO_NO_LIBC=1
   - HAVE_SYS_UTSNAME_H=1
+  - HAVE_SYS_SOCKET_H=1
+  - HAVE_NETINET_IN_H=1
+  - HAVE_SHUTDOWN=1
   - __NO_CTYPE=1
   - ZEND_MM_ERROR=0
   - ZEND_MM_CUSTOM=0
@@ -58,7 +61,7 @@ ld-flags:
   - -no-pie
   - -Wl,-m,elf_x86_64
   - -Wl,--build-id=none
-  - -Wl,-T,examples/typephp-os/user/runtime/linker.ld
+  - -Wl,-T,user/runtime/linker.ld
   - -Wl,--defsym,USER_BASE=0x41000000
 link-paths:
   - ../../build

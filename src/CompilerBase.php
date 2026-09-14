@@ -327,7 +327,6 @@ class CompilerBase implements PropertyAccessContext
         'pcntl_',
         'posix_',
         'socket_',
-        'curl_',
         'ftp_',
         'opcache_',
     ];

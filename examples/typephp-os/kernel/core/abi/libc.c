@@ -130,7 +130,7 @@ __attribute__((weak, noreturn)) void typephp_os_panic(const char *message)
     }
 }
 
-int php_nano_host_random_bytes(void *bytes, size_t size)
+__attribute__((weak)) int php_nano_host_random_bytes(void *bytes, size_t size)
 {
     static uint64_t state = UINT64_C(0x9e3779b97f4a7c15);
     unsigned char *output = (unsigned char *) bytes;
@@ -143,7 +143,7 @@ int php_nano_host_random_bytes(void *bytes, size_t size)
     return 0;
 }
 
-uint64_t php_nano_host_random_seed(void)
+__attribute__((weak)) uint64_t php_nano_host_random_seed(void)
 {
     uint64_t seed = 0;
     (void) php_nano_host_random_bytes(&seed, sizeof(seed));
@@ -443,6 +443,57 @@ char *strcat(char *destination, const char *source)
     return result;
 }
 
+char *strcpy(char *destination, const char *source)
+{
+    char *result = destination;
+    while ((*destination++ = *source++) != '\0') {
+    }
+    return result;
+}
+
+char *strncpy(char *destination, const char *source, size_t size)
+{
+    char *result = destination;
+    while (size != 0 && *source != '\0') {
+        *destination++ = *source++;
+        --size;
+    }
+    while (size-- != 0) {
+        *destination++ = '\0';
+    }
+    return result;
+}
+
+size_t strspn(const char *string, const char *accept)
+{
+    const char *cursor = string;
+    while (*cursor != '\0' && strchr(accept, *cursor) != 0) {
+        ++cursor;
+    }
+    return (size_t) (cursor - string);
+}
+
+size_t strcspn(const char *string, const char *reject)
+{
+    const char *cursor = string;
+    while (*cursor != '\0' && strchr(reject, *cursor) == 0) {
+        ++cursor;
+    }
+    return (size_t) (cursor - string);
+}
+
+void *memrchr(const void *memory, int character, size_t size)
+{
+    const unsigned char *cursor = (const unsigned char *) memory + size;
+    const unsigned char value = (unsigned char) character;
+    while (size-- != 0) {
+        if (*--cursor == value) {
+            return (void *) cursor;
+        }
+    }
+    return 0;
+}
+
 char *strpbrk(const char *string, const char *characters)
 {
     for (; *string != '\0'; ++string) {
@@ -493,6 +544,11 @@ unsigned long long strtoull(const char *string, char **end, int base)
         *end = (char *) cursor;
     }
     return value;
+}
+
+unsigned long strtoul(const char *string, char **end, int base)
+{
+    return (unsigned long) strtoull(string, end, base);
 }
 
 long long strtoll(const char *string, char **end, int base)
@@ -633,7 +689,115 @@ long long llabs(long long value)
     return value < 0 ? -value : value;
 }
 
-int ap_php_vsnprintf(char *buffer, size_t size, const char *format, va_list args);
+static void format_byte(char *buffer, size_t size, size_t *length, char byte)
+{
+    if (*length + 1 < size) {
+        buffer[*length] = byte;
+    }
+    ++*length;
+}
+
+static void format_unsigned(char *buffer, size_t size, size_t *length,
+    unsigned long long value, unsigned int base)
+{
+    static const char digits[] = "0123456789abcdef";
+    char reversed[32];
+    size_t count = 0;
+    do {
+        reversed[count++] = digits[value % base];
+        value /= base;
+    } while (value != 0);
+    while (count != 0) {
+        format_byte(buffer, size, length, reversed[--count]);
+    }
+}
+
+/* php-nano's main/snprintf.c provides the strong, fully compatible version.
+ * Plain C user programs only need this small freestanding fallback. */
+__attribute__((weak)) int ap_php_vsnprintf(
+    char *buffer, size_t size, const char *format, va_list args)
+{
+    size_t length = 0;
+    while (*format != '\0') {
+        int long_count = 0;
+        int size_value = 0;
+        if (*format != '%') {
+            format_byte(buffer, size, &length, *format++);
+            continue;
+        }
+        ++format;
+        if (*format == '%') {
+            format_byte(buffer, size, &length, *format++);
+            continue;
+        }
+        while (*format == '-' || *format == '+' || *format == ' '
+            || *format == '#' || *format == '0'
+            || (*format >= '1' && *format <= '9') || *format == '.') {
+            ++format;
+        }
+        while (*format == 'l') {
+            ++long_count;
+            ++format;
+        }
+        if (*format == 'z') {
+            size_value = 1;
+            ++format;
+        }
+        switch (*format++) {
+        case 's': {
+            const char *string = va_arg(args, const char *);
+            if (string == 0) {
+                string = "(null)";
+            }
+            while (*string != '\0') {
+                format_byte(buffer, size, &length, *string++);
+            }
+            break;
+        }
+        case 'c':
+            format_byte(buffer, size, &length, (char) va_arg(args, int));
+            break;
+        case 'd':
+        case 'i': {
+            long long value = long_count >= 2 ? va_arg(args, long long)
+                : (long_count == 1 ? va_arg(args, long) : va_arg(args, int));
+            if (value < 0) {
+                format_byte(buffer, size, &length, '-');
+                format_unsigned(buffer, size, &length,
+                    (unsigned long long) (-(value + 1)) + 1, 10);
+            } else {
+                format_unsigned(buffer, size, &length,
+                    (unsigned long long) value, 10);
+            }
+            break;
+        }
+        case 'u':
+        case 'x': {
+            const char conversion = format[-1];
+            unsigned long long value = size_value ? va_arg(args, size_t)
+                : (long_count >= 2 ? va_arg(args, unsigned long long)
+                : (long_count == 1 ? va_arg(args, unsigned long)
+                : va_arg(args, unsigned int)));
+            format_unsigned(buffer, size, &length, value,
+                conversion == 'x' ? 16 : 10);
+            break;
+        }
+        case 'p':
+            format_byte(buffer, size, &length, '0');
+            format_byte(buffer, size, &length, 'x');
+            format_unsigned(buffer, size, &length,
+                (uintptr_t) va_arg(args, void *), 16);
+            break;
+        default:
+            format_byte(buffer, size, &length, '?');
+            break;
+        }
+    }
+    if (size != 0) {
+        buffer[length < size ? length : size - 1] = '\0';
+    }
+    return length > INT32_MAX ? INT32_MAX : (int) length;
+}
 
 int vsnprintf(char *buffer, size_t size, const char *format, va_list args)
 {
@@ -786,6 +950,15 @@ void *realloc(void *pointer, size_t size)
         memcpy(replacement, pointer, old->size < size ? old->size : size);
     }
     return replacement;
+}
+
+void *reallocarray(void *pointer, size_t count, size_t size)
+{
+    if (count != 0 && size > SIZE_MAX / count) {
+        errno = ENOMEM;
+        return 0;
+    }
+    return realloc(pointer, count * size);
 }
 
 int posix_memalign(void **result, size_t alignment, size_t size)

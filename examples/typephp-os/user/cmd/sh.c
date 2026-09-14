@@ -61,8 +61,8 @@ int main(int argc, char **argv)
     (void) write(STDOUT_FILENO, "Ring 3 confirmed\n",
         sizeof("Ring 3 confirmed\n") - 1);
     (void) write(STDOUT_FILENO,
-        "Commands: ls, cd, pwd, date, uname, free, cat, echo, write, touch, mkdir, rm, rmdir, mv, memtest, systest, builtins, fault, vmfault, wrfault\n",
-        sizeof("Commands: ls, cd, pwd, date, uname, free, cat, echo, write, touch, mkdir, rm, rmdir, mv, memtest, systest, builtins, fault, vmfault, wrfault\n") - 1);
+        "Commands: ls, cd, pwd, date, uname, free, cat, echo, write, touch, mkdir, rm, rmdir, mv, memtest, systest, nettest, builtins, tnhello, https, fault, vmfault, wrfault\n",
+        sizeof("Commands: ls, cd, pwd, date, uname, free, cat, echo, write, touch, mkdir, rm, rmdir, mv, memtest, systest, nettest, builtins, tnhello, https, fault, vmfault, wrfault\n") - 1);
     for (;;) {
         char *arguments[9];
         int argument_count = 0;

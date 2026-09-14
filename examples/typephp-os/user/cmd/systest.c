@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -47,6 +48,7 @@ int main(int argc, char **argv)
     struct dirent *entry;
     int found_hello = 0;
     int fd;
+    int socket_fd;
     (void) argc;
     (void) argv;
 
@@ -126,6 +128,18 @@ int main(int argc, char **argv)
         || (after_sleep.tv_sec == monotonic.tv_sec
             && after_sleep.tv_nsec - monotonic.tv_nsec < 20000000L)) {
         return fail("interruptible nanosleep");
+    }
+
+    if (socket(AF_INET, SOCK_RAW, 0) != -1 || errno != ESOCKTNOSUPPORT) {
+        return fail("raw socket rejection");
+    }
+    socket_fd = socket(AF_INET,
+        SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (socket_fd < 0
+        || (fcntl(socket_fd, F_GETFL) & O_NONBLOCK) == 0
+        || fcntl(socket_fd, F_GETFD) != FD_CLOEXEC
+        || close(socket_fd) != 0) {
+        return fail("TCP socket descriptor ABI");
     }
 
     (void) write(STDOUT_FILENO, "basic syscalls: OK\n",

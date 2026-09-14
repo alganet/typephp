@@ -63,17 +63,31 @@ final class CompilationStatisticsTest extends BaseTest
         self::assertSame([], $selection->features);
     }
 
-    public function testDynamicFunctionCallFallsBackToAllExtensions(): void
+    public function testDynamicFunctionCallFallsBackToBuiltInExtensionsOnly(): void
     {
         $statistics = new CompilationStatistics();
         $statistics->begin();
         $statistics->record(CompilationStatistics::DYNAMIC_CAPABILITIES, 'function-call');
         $statistics->finish();
 
-        $selection = (new NanoExtensionSelector())->select($statistics, ['json', 'standard']);
+        $selection = (new NanoExtensionSelector())->select(
+            $statistics,
+            ['curl', 'json', 'openssl', 'standard'],
+        );
 
         self::assertTrue($selection->completeFallback);
         self::assertSame(['json', 'standard'], $selection->extensions);
+
+        $composition = (new NanoSourceComposer())->compose(
+            sys_get_temp_dir() . '/typephp-nano-dynamic-fallback-test',
+            'dynamic_fallback_test',
+            false,
+            $statistics,
+        );
+        self::assertFalse($this->containsSource($composition['packageSources'], 'main/network.c'));
+        self::assertFalse($this->containsSource($composition['packageSources'], 'main/streams/xp_socket.c'));
+        self::assertFalse($this->containsSource($composition['packageSources'], 'ext/curl/interface.c'));
+        self::assertFalse($this->containsSource($composition['packageSources'], 'ext/openssl/openssl.c'));
     }
 
     public function testDateRemainsWholeWhileStandardUsesFineGrainedFeatures(): void

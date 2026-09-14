@@ -40,7 +40,9 @@ project owns the freestanding boundary under `kernel/core/abi`: implemented
 C/POSIX and C++ ABI functions live there, while APIs required for linking but
 not implemented by the kernel are exported as panic stubs. Consequently an
 unsupported operation fails immediately with its ABI symbol instead of
-silently returning fabricated data. Sockets are outside the current scope.
+silently returning fabricated data. Networking is split deliberately: the
+kernel owns the Ethernet and TCP/IP data path, while HTTP and TLS libraries
+remain ordinary userspace dependencies.
 On a fresh checkout, run `examples/typephp-os/tools/fetch-thirdparty.sh` before
 invoking tpc directly; `make payload` performs both steps automatically.
 
@@ -106,6 +108,10 @@ To build and audit the restricted hosted Toybox applet set, run
 `make thirdparty-smoke`. This is an integration audit, not part of the boot
 image.
 
+Run `make network-thirdparty-smoke` to build and audit the pinned static
+OpenSSL/nghttp2/curl stack. Its curl protocol list must contain only HTTP and
+HTTPS, and its feature list must contain HTTP2.
+
 The Makefile compiles the startup sources under `boot/` directly. Its 256 KiB
 early kernel stack is kept separate from the adjacent identity-map tables. The 32-bit
 Multiboot bootstrap cannot participate in the 64-bit payload link; the 64-bit
@@ -131,6 +137,7 @@ To invoke QEMU manually:
 qemu-system-x86_64 -m 512M \
   -kernel examples/typephp-os/build/typephp-os.elf \
   -drive file=examples/typephp-os/build/typephp-os.img,format=raw,if=ide,index=0 \
+  -netdev user,id=net0 -device e1000,netdev=net0 \
   -display none -serial stdio -monitor none -no-reboot -no-shutdown
 ```
 
@@ -181,6 +188,10 @@ The QEMU smoke test currently verifies:
   `truncate`, and `ftruncate`), exercised from both C and PHP Nano;
 - Linux-compatible directory descriptors and `getdents64`, exposed to C and
   PHP Nano through `opendir`, `readdir`, `rewinddir`, and `closedir`;
+- a PCI/MMIO Intel 82540EM driver, lwIP raw IPv4/TCP data path, and
+  Linux-numbered socket/connect/send/recv/shutdown/name/options/poll ABI;
+- a Ring-3 TCP/HTTP smoke command that reaches a host service through QEMU's
+  NAT network without placing an HTTP implementation in the kernel;
 - the first `fcntl` subset (`F_GETFD`, `F_SETFD`, `F_GETFL`, `F_SETFL`),
   including tracked `FD_CLOEXEC`/`O_NONBLOCK` state and effective `O_APPEND`;
 - single-task PID/TID and root UID/GID queries plus `gettimeofday`,
@@ -208,8 +219,11 @@ performs its own runtime initialization. Rename
 currently stays within one parent directory; cross-directory rename,
 replacement semantics, long filenames, timestamps, permissions, and a general
 block-device layer remain future work.
-Network sockets, dynamic module loading, `include`/`require`/`eval`, and PHP
-APIs that execute host commands remain unavailable.
+DNS name resolution, TLS entropy integration, IPv6, UDP userspace sockets,
+listening/server sockets, dynamic module loading, `include`/`require`/`eval`,
+and PHP APIs that execute host commands remain unavailable. The first network
+milestone provides outbound IPv4 TCP; OpenSSL/nghttp2/curl are not yet linked
+into a TypePHP-OS user ELF.
 
 ## Single-task userspace
 
@@ -227,7 +241,10 @@ The native x86-64 `SYSCALL` boundary provides synchronous `read`, `write`, `clos
 queries, `time`, `gettimeofday`, `clock_gettime`, `clock_getres`, `nanosleep`, `brk`,
 anonymous private `mmap`, `mprotect`, `munmap`, `getdents64`, the initial
 `fcntl` flag operations, fixed-console `ioctl(TIOCGWINSZ)`, and private
-spawn and same-directory rename operations. The former private directory-list
+spawn and same-directory rename operations. The network subset adds
+`socket`, `connect`, `sendto`, `recvfrom`, `shutdown`, socket-name and option
+queries, and `poll`; all are Linux-numbered userspace calls backed by the
+kernel's lwIP raw TCP control blocks. The former private directory-list
 syscall has been removed; `ls` and PHP Nano use the standard directory ABI. Standard
 input and output are backed by QEMU's COM1 serial console. Syscall numbers are
 shared by the kernel and userspace through `typephp_os_syscall.h`.
@@ -308,6 +325,7 @@ rm NOTE.TXT
 rmdir TMP
 mv OLD.TXT NEW.TXT
 systest
+nettest
 cd DOCS
 pwd
 ls
@@ -320,7 +338,8 @@ attempted write to a read-only `mmap()` page. The kernel reports each Ring-3
 exception, destroys the faulty address space, and restores the shell. The
 `memtest` command exercises `sbrk()`, anonymous mapping, protection changes,
 and unmapping. `systest` covers file metadata, persistence/truncation, fixed
-single-task identities, and wall/monotonic clock ABIs. User exceptions for
+single-task identities, wall/monotonic clock ABIs, and socket descriptor
+flags. `nettest` performs a real TCP HTTP request to the QEMU host. User exceptions for
 divide errors, breakpoints, bounds, invalid
 opcodes, invalid TSS/segments, stack faults, general-protection faults, and
 page faults have IDT entries. A fault raised in Ring 0 still causes an

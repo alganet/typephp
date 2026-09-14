@@ -7,6 +7,7 @@
  * any accidental runtime use fails loudly instead of returning fake data. */
 .macro TYPEPHP_OS_UNIMPLEMENTED symbol
     .global \symbol
+    .weak \symbol
     .type \symbol, @function
 \symbol:
     lea .Lmessage\@(%rip), %rdi
@@ -19,6 +20,8 @@
 
 TYPEPHP_OS_UNIMPLEMENTED chmod
 TYPEPHP_OS_UNIMPLEMENTED chown
+TYPEPHP_OS_UNIMPLEMENTED accept
+TYPEPHP_OS_UNIMPLEMENTED listen
 TYPEPHP_OS_UNIMPLEMENTED fdopen
 TYPEPHP_OS_UNIMPLEMENTED feof
 TYPEPHP_OS_UNIMPLEMENTED fileno

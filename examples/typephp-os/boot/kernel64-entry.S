@@ -20,7 +20,11 @@ kernel64_entry:
 
     mov %r12, %rdi
     mov %r13, %rsi
+    # The Multiboot bootstrap calls this entry point, so RSP is 8 mod 16 here.
+    # Align it before calling C code as required by the x86-64 System V ABI.
+    sub $8, %rsp
     call kernel_entry
+    add $8, %rsp
 
 halt64:
     cli

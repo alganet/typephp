@@ -9,6 +9,7 @@
 #define SYS_stat TYPEPHP_SYS_STAT
 #define SYS_fstat TYPEPHP_SYS_FSTAT
 #define SYS_lstat TYPEPHP_SYS_LSTAT
+#define SYS_poll TYPEPHP_SYS_POLL
 #define SYS_lseek TYPEPHP_SYS_LSEEK
 #define SYS_mmap TYPEPHP_SYS_MMAP
 #define SYS_mprotect TYPEPHP_SYS_MPROTECT
@@ -17,6 +18,16 @@
 #define SYS_ioctl TYPEPHP_SYS_IOCTL
 #define SYS_access TYPEPHP_SYS_ACCESS
 #define SYS_nanosleep TYPEPHP_SYS_NANOSLEEP
+#define SYS_socket TYPEPHP_SYS_SOCKET
+#define SYS_connect TYPEPHP_SYS_CONNECT
+#define SYS_bind TYPEPHP_SYS_BIND
+#define SYS_sendto TYPEPHP_SYS_SENDTO
+#define SYS_recvfrom TYPEPHP_SYS_RECVFROM
+#define SYS_shutdown TYPEPHP_SYS_SHUTDOWN
+#define SYS_getsockname TYPEPHP_SYS_GETSOCKNAME
+#define SYS_getpeername TYPEPHP_SYS_GETPEERNAME
+#define SYS_setsockopt TYPEPHP_SYS_SETSOCKOPT
+#define SYS_getsockopt TYPEPHP_SYS_GETSOCKOPT
 #define SYS_getpid TYPEPHP_SYS_GETPID
 #define SYS_exit TYPEPHP_SYS_EXIT
 #define SYS_uname TYPEPHP_SYS_UNAME
@@ -45,12 +56,14 @@
 #define SYS_openat TYPEPHP_SYS_OPENAT
 #define SYS_newfstatat TYPEPHP_SYS_NEWFSTATAT
 #define SYS_faccessat TYPEPHP_SYS_FACCESSAT
+#define SYS_getrandom TYPEPHP_SYS_GETRANDOM
 
 /* Private bootstrap services; these deliberately do not claim Linux syscall
  * numbers or semantics. */
 #define SYS_typephp_spawn TYPEPHP_SYS_SPAWN
 #define SYS_typephp_rename TYPEPHP_SYS_RENAME
 #define SYS_typephp_memory_info TYPEPHP_SYS_MEMORY_INFO
+#define SYS_typephp_dns_resolve_ipv4 TYPEPHP_SYS_DNS_RESOLVE_IPV4
 
 long syscall(long number, ...);
 
