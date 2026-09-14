@@ -25,8 +25,17 @@ final class PolymorphicClassDispatchTest extends BaseTest
 
         // Polymorphic get_class() must NOT fold or blindly invoke unchecked C++ helper;
         // it must use runtime php::call to enforce PHP argument semantics (TypeError on null)
+        $persistentFunctions = (new \ReflectionProperty($compiler, 'persistentFuncMap'))->getValue($compiler);
+        $literalStrings = (new \ReflectionProperty($compiler, 'literalStrings'))->getValue($compiler);
+        self::assertArrayHasKey('get_class', $persistentFunctions);
+        self::assertArrayHasKey('get_class', $literalStrings);
         self::assertMatchesRegularExpression(
-            "/php_getpolymorphicclass\(\) \{.*?tmp_var_\d+ = \(php::call\(get_persistent_func\(PersistentFuncId\{0\}, get_str\(3\)\), php::VarList\{animal\}\)\);/s",
+            sprintf(
+                '/php_getpolymorphicclass\(\) \{.*?tmp_var_\d+ = \(php::call\(get_persistent_func'
+                    . '\(PersistentFuncId\{%d\}, get_str\(%d\)\), php::VarList\{animal\}\)\);/s',
+                $persistentFunctions['get_class'],
+                $literalStrings['get_class'],
+            ),
             $code,
         );
 
