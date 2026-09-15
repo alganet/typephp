@@ -8,7 +8,6 @@
 
 namespace TypePhp;
 
-use MJS\TopSort\Implementations\StringSort;
 use TypePhp\Entity\ArgInfo;
 use TypePhp\Entity\ArrayInitPlan;
 use TypePhp\Entity\ClassDef;
@@ -70,7 +69,6 @@ class Preprocessor extends CompilerBase
         '__debuginfo' => true,
     ];
 
-    protected string $targetName = 'app';
 
     /**
      * Validate every method that will become part of an enum. This is shared
@@ -265,7 +263,6 @@ class Preprocessor extends CompilerBase
 
     public function getSortedFiles(array $list): array
     {
-        $sorter = new StringSort();
         $fileDeps = [];
 
         // Build the dependency graph
@@ -281,16 +278,35 @@ class Preprocessor extends CompilerBase
             }
             $deps = array_unique($deps);
             $fileDeps[$file] = $deps;
-            $sorter->add($file, $deps);
         }
 
-        $sortedFiles = $sorter->sort();
-
-        // Append files that do not participate in dependency management (non-stub files not present in the sorted list)
-        foreach ($list as $file) {
-            if (!$this->isStubFile($file) and !in_array($file, $sortedFiles)) {
+        // A source-level call graph may legally contain cycles (mutually
+        // recursive functions in different files). Use a cycle-tolerant DFS:
+        // acyclic dependencies still precede their consumers, while a back
+        // edge simply keeps the strongly-connected component in stable input
+        // order. Declaration collection has already completed for every file.
+        $known = array_fill_keys($list, true);
+        $visiting = [];
+        $visited = [];
+        $sortedFiles = [];
+        $visit = function (string $file) use (&$visit, &$visiting, &$visited, &$sortedFiles, $fileDeps, $known): void {
+            if (isset($visited[$file]) || isset($visiting[$file])) {
+                return;
+            }
+            $visiting[$file] = true;
+            foreach ($fileDeps[$file] ?? [] as $dependency) {
+                if (isset($known[$dependency])) {
+                    $visit($dependency);
+                }
+            }
+            unset($visiting[$file]);
+            $visited[$file] = true;
+            if (!$this->isStubFile($file)) {
                 $sortedFiles[] = $file;
             }
+        };
+        foreach ($list as $file) {
+            $visit($file);
         }
 
         $this->climate->lightBlue('prepare completed: ' . count($sortedFiles) . ' source files in total');
@@ -471,6 +487,7 @@ class Preprocessor extends CompilerBase
                     $this->fatalError($v, 'Unsupported statement: ' . $v->getType());
                 }
             }
+            $this->findSymbolUsing($stmts);
         } finally {
             $this->restoreCompilerPhase($previousPhase);
         }
@@ -596,18 +613,24 @@ class Preprocessor extends CompilerBase
         if ($this->declarationExpressionsFinalized) {
             return;
         }
-        foreach ($files as $file) {
-            $path = realpath($file);
-            if ($path === false || !isset($this->preparedFileAsts[$path])) {
-                continue;
+        $previousCacheSitePass = $this->cacheSitePass;
+        $this->cacheSitePass = 'declaration';
+        try {
+            foreach ($files as $file) {
+                $path = realpath($file);
+                if ($path === false || !isset($this->preparedFileAsts[$path])) {
+                    continue;
+                }
+                $this->loadFile($path);
+                $this->resetFile();
+                $this->resetFunction();
+                $this->resetMethod();
+                $this->resetClass();
+                $this->resetNamespace();
+                $this->finalizeDeclarationStatementList($this->preparedFileAsts[$path]);
             }
-            $this->loadFile($path);
-            $this->resetFile();
-            $this->resetFunction();
-            $this->resetMethod();
-            $this->resetClass();
-            $this->resetNamespace();
-            $this->finalizeDeclarationStatementList($this->preparedFileAsts[$path]);
+        } finally {
+            $this->cacheSitePass = $previousCacheSitePass;
         }
         $this->declarationExpressionsFinalized = true;
     }
@@ -1021,12 +1044,11 @@ class Preprocessor extends CompilerBase
     }
 
     /**
-     * Collect per-file symbol dependencies for the incremental compilation cache.
+     * Collect per-file symbol dependencies used by declaration headers.
      *
-     * The cache does not consume this graph yet, but this collector is retained
-     * intentionally so cache invalidation can later be based on symbol usage.
+     * @param NodeAbstract|array<Node> $ast
      */
-    protected function findSymbolUsing(NodeAbstract $ast): void
+    protected function findSymbolUsing(NodeAbstract|array $ast): void
     {
         $nodeFinder = new NodeFinder();
         $functionCalls = $nodeFinder->findInstanceOf($ast, Node\Expr\FuncCall::class);
@@ -1034,10 +1056,23 @@ class Preprocessor extends CompilerBase
         foreach ($functionCalls as $call) {
             if ($call->name instanceof Node\Name) {
                 // Internal functions do not participate in dependency management
-                $funcName = strtolower($call->name->toString());
+                $resolvedName = $call->name->getAttribute('resolvedName')
+                    ?? $call->name->getAttribute('namespacedName')
+                    ?? $call->name;
+                $funcName = strtolower($resolvedName->toString());
                 if (!$this->isInternalFunction($funcName)) {
-                    $this->symbolCallInFile[$this->file][] = $funcName;
+                    $this->symbolCallInFile[$this->file][] = $this->getFunctionDependencySymbol($funcName);
                 }
+            }
+        }
+
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Expr\ConstFetch::class) as $fetch) {
+            $resolvedName = $fetch->name->getAttribute('resolvedName')
+                ?? $fetch->name->getAttribute('namespacedName')
+                ?? $fetch->name;
+            $constant = $resolvedName->toString();
+            if (!in_array(strtolower($constant), ['true', 'false', 'null'], true)) {
+                $this->symbolCallInFile[$this->file][] = $this->getConstantDependencySymbol($constant);
             }
         }
 
@@ -1048,15 +1083,76 @@ class Preprocessor extends CompilerBase
         $depClasses = array_merge($depClasses, $nodeFinder->findInstanceOf($ast, Node\Expr\New_::class));
         foreach ($depClasses as $call) {
             if ($call->class instanceof Node\Name) {
-                $className = $this->parseIdentifier($call->class);
+                $resolvedClass = $call->class->getAttribute('resolvedName')
+                    ?? $call->class->getAttribute('namespacedName')
+                    ?? $call->class;
+                $className = $resolvedClass->toString();
                 if ($className !== 'self' && $className !== 'static') {
-                    $fullClassName = $this->getNamespacedClassName($className);
-                    $this->symbolCallInFile[$this->file][] = strtolower($fullClassName);
+                    $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($className);
+                }
+            }
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Expr\Instanceof_::class) as $instanceof) {
+            if ($instanceof->class instanceof Node\Name) {
+                $this->recordClassTypeDependency($instanceof->class);
+            }
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\FunctionLike::class) as $functionLike) {
+            $this->recordClassTypeDependency($functionLike->getReturnType());
+            foreach ($functionLike->getParams() as $parameter) {
+                $this->recordClassTypeDependency($parameter->type);
+            }
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\Property::class) as $property) {
+            $this->recordClassTypeDependency($property->type);
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\ClassConst::class) as $constant) {
+            $this->recordClassTypeDependency($constant->type);
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\Catch_::class) as $catch) {
+            foreach ($catch->types as $type) {
+                $this->recordClassTypeDependency($type);
+            }
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Attribute::class) as $attribute) {
+            $this->recordClassTypeDependency($attribute->name);
+        }
+        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\Global_::class) as $global) {
+            foreach ($global->vars as $variable) {
+                if ($variable instanceof Node\Expr\Variable && is_string($variable->name)) {
+                    $this->symbolCallInFile[$this->file][] = $this->getGlobalDependencySymbol(
+                        $this->escapeVarName($variable->name),
+                    );
                 }
             }
         }
         // Deduplicate dependencies
-        $this->symbolCallInFile[$this->file] = array_unique($this->symbolCallInFile[$this->file]);
+        $this->symbolCallInFile[$this->file] = array_values(array_unique($this->symbolCallInFile[$this->file]));
+    }
+
+    protected function recordClassTypeDependency(?NodeAbstract $type): void
+    {
+        if ($type instanceof Node\Name) {
+            if ($type->isSpecialClassName()) {
+                return;
+            }
+            $resolvedName = $type->getAttribute('resolvedName')
+                ?? $type->getAttribute('namespacedName')
+                ?? $type;
+            $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol(
+                $resolvedName->toString(),
+            );
+            return;
+        }
+        if ($type instanceof Node\NullableType) {
+            $this->recordClassTypeDependency($type->type);
+            return;
+        }
+        if ($type instanceof Node\UnionType || $type instanceof Node\IntersectionType) {
+            foreach ($type->types as $member) {
+                $this->recordClassTypeDependency($member);
+            }
+        }
     }
 
     protected function prepareNamespace(Node\Stmt\Namespace_ $node): void
@@ -1597,6 +1693,12 @@ class Preprocessor extends CompilerBase
             ? $this->classDef->getNamespacedName(false) . '::' . $functionDef->name
             : $functionDef->getNamespacedName();
         $this->addFunction($name, $functionDef);
+        $this->symbolDeclInFile[$this->getNativeFunctionDependencySymbol($name)] = $this->file;
+        if (!$functionDef->method) {
+            $this->symbolDeclInFile[$this->getFunctionDependencySymbol(
+                $functionDef->getNamespacedName(),
+            )] = $this->file;
+        }
         if ($this->methodDef) {
             $this->methodDef->functionDef = $functionDef;
         }
@@ -1619,7 +1721,8 @@ class Preprocessor extends CompilerBase
         } else {
             $flags = Modifiers::PUBLIC;
         }
-        if (isset($this->symbolDeclInFile[$fullClassNameLower])) {
+        $classDependencySymbol = $this->getClassDependencySymbol($fullClassNameLower);
+        if (isset($this->symbolDeclInFile[$classDependencySymbol])) {
             $this->fatalError($class, "Duplicate class `{$fullClassName}`");
         }
         // Dynamic properties are forbidden on readonly classes and enums.
@@ -1676,7 +1779,7 @@ class Preprocessor extends CompilerBase
             $this->symbols->setParent($fullClassNameLower, $parentClassLower);
             $this->classSubClasses[$parentClassLower][] = $fullClassNameLower;
             if (!$this->isInternalClass($parentClassLower)) {
-                $this->symbolCallInFile[$this->file][] = $parentClassLower;
+                $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($parentClassLower);
             }
             $this->classDef->extends = $this->parentClass;
             // Whether it inherits from an internal class
@@ -1709,7 +1812,7 @@ class Preprocessor extends CompilerBase
             $this->classDef->traitUseFunctions = $this->useFunctions;
             $this->classDef->traitUseConstants = $this->useConstants;
         }
-        $this->symbolDeclInFile[$fullClassNameLower] = $this->file;
+        $this->symbolDeclInFile[$classDependencySymbol] = $this->file;
 
         if ($class instanceof Node\Stmt\Class_) {
             $generatedPrinter = null;
@@ -3046,15 +3149,16 @@ class Preprocessor extends CompilerBase
                 $this->interfaceDef->extends = $parentName;
             }
             if (!$this->isInternalInterface($parentName)) {
-                $this->symbolCallInFile[$this->file][] = strtolower($parentName);
+                $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($parentName);
             }
         }
 
-        if (isset($this->symbolDeclInFile[$interfaceNameLower])) {
+        $interfaceDependencySymbol = $this->getClassDependencySymbol($interfaceNameLower);
+        if (isset($this->symbolDeclInFile[$interfaceDependencySymbol])) {
             $this->fatalError($v, "Duplicate interface `{$interfaceName}`");
         }
 
-        $this->symbolDeclInFile[$interfaceNameLower] = $this->file;
+        $this->symbolDeclInFile[$interfaceDependencySymbol] = $this->file;
         $this->symbols->putInterface($this->escapeClass($interfaceName), $this->interfaceDef);
         $this->interfacesDefineInFile[$interfaceName] = $this->interfaceDef;
 
@@ -3322,7 +3426,7 @@ class Preprocessor extends CompilerBase
             $traitName = $this->getNamespacedClassName($this->parseIdentifier($trait));
             $this->classDef->usedTraits[] = $traitName;
             if (!$this->isInternalClass($traitName)) {
-                $this->symbolCallInFile[$this->file][] = strtolower($traitName);
+                $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($traitName);
             }
         }
         foreach ($aliases as $fullMethodName => $aliasList) {

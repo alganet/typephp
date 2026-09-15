@@ -59,6 +59,41 @@ final class CompilationStatistics
         return isset($this->counters[$category][$name]);
     }
 
+    /** @param array<mixed, mixed> $counters */
+    public function merge(array $counters): void
+    {
+        foreach ($counters as $category => $values) {
+            if (!is_string($category) || !is_array($values)) {
+                continue;
+            }
+            foreach ($values as $name => $count) {
+                if (is_string($name) && is_int($count) && $count > 0) {
+                    $this->counters[$category][$name] = ($this->counters[$category][$name] ?? 0) + $count;
+                }
+            }
+        }
+    }
+
+    /**
+     * Return counters recorded since an earlier all() snapshot.
+     *
+     * @param array<string, array<string, int>> $before
+     * @return array<string, array<string, int>>
+     */
+    public function delta(array $before): array
+    {
+        $delta = [];
+        foreach ($this->counters as $category => $values) {
+            foreach ($values as $name => $count) {
+                $difference = $count - ($before[$category][$name] ?? 0);
+                if ($difference > 0) {
+                    $delta[$category][$name] = $difference;
+                }
+            }
+        }
+        return $delta;
+    }
+
     /** @return array<string, array<string, int>> */
     public function all(): array
     {

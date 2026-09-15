@@ -1833,7 +1833,7 @@ YAML);
         $options = $this->invokeMethod('getCompileCommandOptions');
 
         $this->assertContains('TYPEPHP_ABI_DEFAULTS_EXPORTS=1', $options['user_defines']);
-        $this->assertStringEndsWith('/php_abi_defaults_func_decl.h', $options['forced_include']);
+        $this->assertStringEndsWith('/php_abi_defaults_all_decl.h', $options['forced_include']);
         if (!$this->compiler->isWindows()) {
             $flags = $this->getPropertyValue('compilerBackend')->buildCompileOptions($options->toArray());
             $this->assertStringContainsString('-fvisibility=hidden', $flags);

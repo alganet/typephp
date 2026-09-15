@@ -91,7 +91,7 @@ trait NativeCommandOptionsTrait
         if ($this->isBuildModeLib()) {
             $options = $options->with(
                 'forced_include',
-                $this->getIncludeDir() . '/php_' . $this->targetName . '_func_decl.h'
+                $this->getIncludeDir() . '/php_' . $this->targetName . '_all_decl.h'
             );
         }
 

@@ -120,7 +120,9 @@ trait CompilationStateTrait
         if (isset($this->stdTypeMap[$key])) {
             return $this->stdTypeMap[$key];
         }
-        $typeId = count($this->stdTypeMap) + 1;
+        // Zero means "not a boxed std container" at runtime. Persistent IDs
+        // therefore start at one and are never renumbered between builds.
+        $typeId = $this->getStableIdRegistry()->allocate('std-type', $key) + 1;
         $this->stdTypeMap[$key] = $typeId;
         return $typeId;
     }
@@ -158,7 +160,8 @@ trait CompilationStateTrait
 
     protected function addLiteralString(string $value): int
     {
-        $index                        = $this->literalStringIndex++;
+        $index = $this->getStableIdRegistry()->allocate('literal', $value);
+        $this->literalStringIndex = max($this->literalStringIndex, $index + 1);
         $this->literalStrings[$value] = $index;
 
         return $index;
@@ -167,6 +170,21 @@ trait CompilationStateTrait
     protected function addGlobalVar(string $name, string $type): void
     {
         $this->globalVars[$name] = $type;
+        $this->recordGlobalVarUsage($name);
+    }
+
+    protected function recordGlobalVarUsage(string $name): void
+    {
+        if (!isset($this->file) || $this->file === '') {
+            return;
+        }
+        $this->globalVarsInFile[$this->file][$name] = $this->globalVars[$name] ?? Type::VAR;
+        $symbol = $this->getGlobalDependencySymbol($name);
+        if (!isset($this->globalVarDeclInFile[$name])) {
+            $this->globalVarDeclInFile[$name] = $this->file;
+            $this->symbolDeclInFile[$symbol] = $this->file;
+        }
+        $this->symbolCallInFile[$this->file][] = $symbol;
     }
 
     protected function promoteGlobalOrStaticToNativeObject(
@@ -222,6 +240,7 @@ trait CompilationStateTrait
     protected function addScopeGlobalVar(string $name, string $type): void
     {
         $this->context->globalVars[$name] = $type;
+        $this->recordGlobalVarUsage($name);
     }
 
     protected function addObject(string $name, string $class): void
@@ -318,8 +337,9 @@ trait CompilationStateTrait
     {
         // The function declaration was detected during the preprocessing stage but is not yet defined,
         // meaning it is in the current file but appears in the wrong order. Skip it and handle it later.
-        if (isset($this->symbolDeclInFile[$name])
-            and $this->symbolDeclInFile[$name] === $this->file
+        $symbol = $this->getNativeFunctionDependencySymbol($name);
+        if (isset($this->symbolDeclInFile[$symbol])
+            and $this->symbolDeclInFile[$symbol] === $this->file
             and !$this->hasFunction($name)) {
             $this->redoAfterDeclare[$name] = true;
             throw new Skip();

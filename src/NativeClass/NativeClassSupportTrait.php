@@ -1988,20 +1988,24 @@ trait NativeClassSupportTrait
         $ordered[] = $class;
     }
 
-    protected function genNativeObjectDeclarations(): string
+    protected function genNativeObjectDeclarations(?string $sourceFile = null): string
     {
         $this->validateNativeObjectMemberNames();
         $classes = $this->getNativeObjectClassesInDeclarationOrder();
+        if ($sourceFile !== null) {
+            $classes = array_values(array_filter(
+                $classes,
+                static fn (ClassDef $class): bool => $class->sourceFile === $sourceFile,
+            ));
+        }
         if ($classes === []) {
             return '';
         }
 
         $code = '// TypePHP Native Object declarations' . PHP_EOL;
-        $code .= 'struct typephp_native_storage_constructor_t {};' . PHP_EOL;
-        foreach ($classes as $class) {
-            $code .= 'class ' . $this->getNativeObjectCppName($class) . ';' . PHP_EOL;
+        if ($sourceFile === null) {
+            $code .= $this->genNativeObjectForwardDeclarations();
         }
-        $code .= PHP_EOL;
 
         foreach ($classes as $class) {
             $name = $this->getNativeObjectCppName($class);
@@ -2100,6 +2104,19 @@ trait NativeClassSupportTrait
                 . $this->getNativeObjectDescriptorName($class) . ';' . PHP_EOL . PHP_EOL;
         }
         return $code;
+    }
+
+    protected function genNativeObjectForwardDeclarations(): string
+    {
+        $classes = $this->getNativeObjectClassesInDeclarationOrder();
+        if ($classes === []) {
+            return '';
+        }
+        $code = 'struct typephp_native_storage_constructor_t {};' . PHP_EOL;
+        foreach ($classes as $class) {
+            $code .= 'class ' . $this->getNativeObjectCppName($class) . ';' . PHP_EOL;
+        }
+        return $code . PHP_EOL;
     }
 
     protected function genNativeObjectRuntimeDefinition(ClassDef $class): string
