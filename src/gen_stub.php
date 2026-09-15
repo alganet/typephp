@@ -5028,7 +5028,6 @@ class FileInfo {
     }
 
     public static function parseStubFile(string $code, string $phpVersion = '8.5', string $sourceFile = ''): FileInfo {
-        $parser = (new PhpParser\ParserFactory())->createForVersion(PhpParser\PhpVersion::fromString($phpVersion));
         $nodeTraverser = new PhpParser\NodeTraverser;
         $nodeTraverser->addVisitor(new PhpParser\NodeVisitor\NameResolver(
             null,
@@ -5046,7 +5045,13 @@ class FileInfo {
             }
         };
 
-        $stmts = $parser->parse($code);
+        if ($sourceFile !== '' && is_file($sourceFile)) {
+            $stmts = getTranslator()->loadPristineAst($sourceFile, $code, $phpVersion);
+        } else {
+            // Preserve the standalone API for source strings without a file.
+            $parser = (new PhpParser\ParserFactory())->createForVersion(PhpParser\PhpVersion::fromString($phpVersion));
+            $stmts = $parser->parse($code);
+        }
         $stmts = $nodeTraverser->traverse($stmts);
 
         $fileTags = DocCommentTag::parseDocComments(self::getFileDocComments($stmts));

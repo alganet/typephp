@@ -5299,6 +5299,16 @@ class CompilerBase implements PropertyAccessContext
         return $this->astCache ??= new AstCache($this->parser, $this->buildDir, $this->phpVersion);
     }
 
+    /** Return an independent pristine tree for each consumer's own visitors. */
+    public function loadPristineAst(string $file, string $source, string $phpVersion): array
+    {
+        if ($phpVersion === $this->phpVersion) {
+            return $this->getAstCache()->load($file, $source);
+        }
+        $parser = (new ParserFactory())->createForVersion(PhpVersion::fromString($phpVersion));
+        return (new AstCache($parser, $this->buildDir, $phpVersion))->load($file, $source);
+    }
+
     protected function getStableIdRegistry(): StableIdRegistry
     {
         if ($this->stableIdRegistry === null) {
@@ -5320,6 +5330,7 @@ class CompilerBase implements PropertyAccessContext
     {
         $targets = [
             $this->buildDir . '/cache/ast',
+            $this->buildDir . '/cache/prepared',
             $this->buildDir . '/cache/incremental/' . ($this->targetName !== '' ? $this->targetName : 'default'),
         ];
         foreach ($targets as $directory) {

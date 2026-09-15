@@ -63,6 +63,14 @@ trait IncrementalCompilationTrait
                     return false;
                 }
                 $emits = $metadata['emitsTranslationUnit'] ?? null;
+                if (($metadata['splitTranslationUnits'] ?? []) !== $this->getSplitTranslationUnits($source)) {
+                    return false;
+                }
+                foreach ($this->getSplitTranslationUnits($source) as $part) {
+                    if (!is_file($part)) {
+                        return false;
+                    }
+                }
                 if (!is_bool($emits)) {
                     return false;
                 }
@@ -243,6 +251,7 @@ trait IncrementalCompilationTrait
                     ?? (bool) ($previous['emitsTranslationUnit'] ?? false),
                 'header' => $this->getDeclarationHeaderFile($path),
                 'cpp' => $this->getCppFile($path),
+                'splitTranslationUnits' => $this->getSplitTranslationUnits($path),
                 'statistics' => $this->incrementalFileMetadata[$path]['statistics']
                     ?? ($previous['statistics'] ?? []),
                 'globals' => $this->globalVarsInFile[$path] ?? [],

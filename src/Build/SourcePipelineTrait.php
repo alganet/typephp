@@ -19,6 +19,7 @@ use TypePhp\Platform\Windows;
 
 trait SourcePipelineTrait
 {
+    use PreparedProjectCacheTrait;
     /**
      * Prepare PHP inputs for the Composer php-nano source-composition build.
      *
@@ -224,6 +225,14 @@ trait SourcePipelineTrait
         }
 
         $files = $this->filterIgnoredFiles($files);
+        $preparedKey = $this->preparedProjectKey($files);
+        if ($this->restorePreparedProject($preparedKey)) {
+            $files = $this->getSortedFiles($files);
+            $this->initializeIncrementalCompilation($files);
+            return $files;
+        }
+        $warningsBefore = $this->preprocessingWarningCount;
+        $inputCount = count($files);
         $this->discoverNativeClassDeclarations($files);
         // Analyze and preprocess the PHP files
         foreach ($files as $k => $file) {
@@ -247,6 +256,9 @@ trait SourcePipelineTrait
         // pointer ABI now, after declarations are known and before the first
         // per-file C++ body is generated.
         $this->discoverNativeGlobalObjects(array_values($files));
+        if (count($files) === $inputCount && $this->preprocessingWarningCount === $warningsBefore) {
+            $this->storePreparedProject($preparedKey);
+        }
         $files = $this->getSortedFiles($files);
         $this->initializeIncrementalCompilation($files);
         return $files;
@@ -344,6 +356,8 @@ trait SourcePipelineTrait
     public function convert(array $files): array
     {
         $this->compilationStatistics->begin();
+        $previousSplitSetting = $this->splitTranslationUnitsEnabled;
+        $this->splitTranslationUnitsEnabled = true;
         $previousPhase = null;
         try {
             $this->composeTraitDeclarations($files);
@@ -376,6 +390,10 @@ trait SourcePipelineTrait
                                 $cppFile = $this->getCppFile($path);
                                 $this->registerGeneratedProjectSource($cppFile);
                                 $sourceFiles[] = $cppFile;
+                                foreach ($this->getSplitTranslationUnits($path) as $part) {
+                                    $this->registerGeneratedProjectSource($part);
+                                    $sourceFiles[] = $part;
+                                }
                             }
                             $this->climate->darkGray(
                                 '[cached] ' . $this->getRelativePath($path),
@@ -402,6 +420,12 @@ trait SourcePipelineTrait
                     $validSourceCount++;
                     if ($cppFile !== null) {
                         $sourceFiles[] = $cppFile;
+                        if (FileScanner::isPhpFile($file)) {
+                            foreach ($this->getSplitTranslationUnits($file) as $part) {
+                                $this->registerGeneratedProjectSource($part);
+                                $sourceFiles[] = $part;
+                            }
+                        }
                     }
                 } catch (Unsupported $e) {
                     echo ' unsupported syntax: ' . $e->getMessage() . "\n";
@@ -446,6 +470,7 @@ trait SourcePipelineTrait
 
             return $sourceFiles;
         } finally {
+            $this->splitTranslationUnitsEnabled = $previousSplitSetting;
             if ($previousPhase !== null) {
                 $this->restoreCompilerPhase($previousPhase);
             }

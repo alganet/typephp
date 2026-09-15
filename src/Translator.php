@@ -25,6 +25,7 @@ use TypePhp\Build\NativeDependencyAuditor;
 use TypePhp\Build\NanoSourceComposer;
 use TypePhp\Build\PrecompiledHeaderManager;
 use TypePhp\Build\SourcePipelineTrait;
+use TypePhp\Build\TranslationUnitSplitTrait;
 use TypePhp\Build\SourceCompileQueue;
 use TypePhp\Build\WasmInterfaceGenerator;
 use TypePhp\Config\ProjectYamlLoader;
@@ -82,6 +83,7 @@ class Translator extends Preprocessor
     use IncrementalCompilationTrait;
     use NativeCommandOptionsTrait;
     use SourcePipelineTrait;
+    use TranslationUnitSplitTrait;
     use ResourceCompilationTrait;
     use ClassConstantValueTrait;
 
@@ -759,8 +761,9 @@ class Translator extends Preprocessor
             while (true) {
                 try {
                     $cppCode = $this->doConvert($phpCode);
-                    $this->recordEmittedTypes($cppCode);
                     $cppFile = $this->getCppFile($file);
+                    $this->recordEmittedTypes($cppCode);
+                    $cppCode = $this->splitLargeTranslationUnit($cppCode, $cppFile, $forceWrite);
                     if ($cppCode === '') {
                         $this->removeEmptyTranslationUnitArtifacts($cppFile);
                     } else {
@@ -1882,6 +1885,10 @@ CODE;
         return hash_final($context);
     }
 
+    private bool $memoizeGeneratedCompileInputs = false;
+    /** @var array<string, array{digest: string, headers: array}> */
+    private array $generatedCompileInputCache = [];
+
     /** @param array<string, true> $visited */
     private function hashGeneratedCompileInput(\HashContext $context, string $file, array &$visited): void
     {
@@ -1895,20 +1902,24 @@ CODE;
             return;
         }
         $visited[$real] = true;
-        $contents = @file_get_contents($real);
-        if (!is_string($contents)) {
-            return;
+        $input = $this->memoizeGeneratedCompileInputs ? ($this->generatedCompileInputCache[$real] ?? null) : null;
+        if ($input === null) {
+            $contents = @file_get_contents($real);
+            if (!is_string($contents)) {
+                return;
+            }
+            preg_match_all('/^\s*#\s*include\s*[<\"]([^>\"]+)[>\"]/m', $contents, $matches);
+            $input = ['digest' => hash('sha256', $contents), 'headers' => $matches[1] ?? []];
+            if ($this->memoizeGeneratedCompileInputs) {
+                $this->generatedCompileInputCache[$real] = $input;
+            }
         }
-        hash_update($context, str_replace('\\', '/', $real) . "\0" . $contents . "\0");
-        $matchCount = preg_match_all('/^\s*#\s*include\s*[<\"]([^>\"]+)[>\"]/m', $contents, $matches);
-        if ($matchCount === false || $matchCount === 0) {
-            return;
-        }
+        hash_update($context, 'digest-v2' . "\0" . str_replace('\\', '/', $real) . "\0" . $input['digest'] . "\0");
         $includeRoot = realpath($this->getIncludeDir());
         if ($includeRoot === false) {
             return;
         }
-        foreach ($matches[1] as $header) {
+        foreach ($input['headers'] as $header) {
             $candidate = $includeRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $header);
             $resolved = realpath($candidate);
             if ($resolved === false
@@ -2279,6 +2290,18 @@ CODE;
 
     protected function compileSourceFile(array $sourceFiles): array
     {
+        $this->memoizeGeneratedCompileInputs = true;
+        $this->generatedCompileInputCache = [];
+        try {
+            return $this->compileSourceFileUncached($sourceFiles);
+        } finally {
+            $this->memoizeGeneratedCompileInputs = false;
+            $this->generatedCompileInputCache = [];
+        }
+    }
+
+    private function compileSourceFileUncached(array $sourceFiles): array
+    {
         $objectFiles = [];
         $totalFiles = count($sourceFiles);
         $failedFiles = [];
@@ -2323,6 +2346,20 @@ CODE;
     }
 
     protected function compileWithProcessPool(array $sourceFiles, int $job): array
+    {
+        // Generation/formatting is finished. Share immutable file digests only
+        // for this native build, including completion callbacks, then discard.
+        $this->memoizeGeneratedCompileInputs = true;
+        $this->generatedCompileInputCache = [];
+        try {
+            return $this->compileWithProcessPoolUncached($sourceFiles, $job);
+        } finally {
+            $this->memoizeGeneratedCompileInputs = false;
+            $this->generatedCompileInputCache = [];
+        }
+    }
+
+    private function compileWithProcessPoolUncached(array $sourceFiles, int $job): array
     {
         $totalFiles = count($sourceFiles);
         $this->climate->lightBlue("Starting parallel compilation with {$job} jobs for {$totalFiles} files");
@@ -4078,6 +4115,7 @@ CODE;
 
     protected function doConvert(string $phpCode): string
     {
+        $this->generatedMethodBodies = [];
         $this->climate->info('convert: ' . $this->getRelativePath($this->file));
 
         $ast = $this->getAstCache()->load($this->file, $phpCode);
@@ -8072,6 +8110,9 @@ CODE;
             // only run in the implementation phase.
             $this->checkParentMethodCanBeOverridden($v, $name);
             $methodCodes[$name] = $this->parseFunction($v);
+            if ($this->splitTranslationUnitsEnabled && !$this->classDef->nativeObject && $methodCodes[$name] !== '') {
+                $this->generatedMethodBodies[] = $methodCodes[$name];
+            }
         } elseif ($this->classDef->trait === null
             && !is_string($v->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE))
             && $this->classDef->hasAbstractMethod($name)

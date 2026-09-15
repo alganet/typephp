@@ -63,6 +63,7 @@ final class AstCacheTest extends TestCase
         self::assertFalse($convertAst[0]->getAttribute('typephpPhaseMutation', false));
         self::assertDirectoryExists($this->buildDirectory . '/cache/ast');
         self::assertCount(1, glob($this->buildDirectory . '/cache/ast/*.ast'));
+
     }
 
     public function testPersistentCacheIsReusedByAnotherCompilerProcess(): void
@@ -166,6 +167,13 @@ final class AstCacheTest extends TestCase
         self::assertSame(1, $parser->parseCount);
         self::assertNotNull($generated);
         self::assertFileExists($generated);
+        self::assertCount(1, glob($this->buildDirectory . '/cache/ast/*.ast'));
+        // Stub visitors replace names; they require an independent pristine AST.
+        $stub = \TypePhp\StubGenerator\FileInfo::parseStubFile(
+            $source, $compiler->getPhpVersion(), $this->sourceFile,
+        );
+        self::assertNotNull($stub);
+        self::assertSame(1, $parser->parseCount);
         self::assertCount(1, glob($this->buildDirectory . '/cache/ast/*.ast'));
     }
 
