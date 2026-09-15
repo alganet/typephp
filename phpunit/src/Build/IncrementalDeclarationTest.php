@@ -137,6 +137,31 @@ PHP);
         );
     }
 
+    public function testGlobalArrayConstantInitializersSurviveColdAndWarmConversion(): void
+    {
+        file_put_contents($this->provider, <<<'PHP'
+<?php
+namespace Incremental;
+const LIMIT = 42;
+const FIRST = [[[LIMIT, 1]], [[2, 3]]];
+const ENABLED = true;
+const SECOND = [0 => ['left' => LIMIT], 'tail' => [2, [3]]];
+function answer(): int { return FIRST[0][0][0] + SECOND[0]['left']; }
+PHP);
+        $first = $this->convertProject();
+        $extension = $this->buildDirectory . '/extension-incremental.cc';
+        $coldCode = file_get_contents($extension);
+        self::assertStringContainsString('php::Array tmp_var_', $coldCode);
+        $coldConstants = $this->property($first, 'constants');
+        self::assertSame(\TypePhp\Type::BOOL, $coldConstants['_const_var_Incremental__ENABLED']->type);
+        $second = $this->convertProject();
+        self::assertFalse($this->invoke($second, 'shouldRegeneratePhpFile', $this->provider));
+        self::assertSame($coldCode, file_get_contents($extension));
+        $warmConstants = $this->property($second, 'constants');
+        self::assertSame($coldConstants['_const_var_Incremental__LIMIT']->type, $warmConstants['_const_var_Incremental__LIMIT']->type);
+        self::assertSame(\TypePhp\Type::BOOL, $warmConstants['_const_var_Incremental__ENABLED']->type);
+    }
+
     public function testGeneratorFingerprintChangeKeepsIdenticalCppTimestamps(): void
     {
         $first = $this->convertProject();

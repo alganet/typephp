@@ -17,14 +17,34 @@ trait DeclarationSymbolTrait
     {
         foreach ($v2->consts as $const) {
             $name  = $this->parseIdentifier($const->name);
-            $value = $this->compilerPhase === self::PHASE_CONVERT
-                ? $this->parseIdentifier($const->value)
-                : '';
             if ($this->namespace) {
                 $name = $this->namespace . '\\' . $name;
             }
-            $this->addConstant($name, $value, $const->value);
+            // Declaration finalization owns whole-program initialization.
+            // Re-parsing a dirty file must not replace that metadata with
+            // temporaries allocated in the function-body context.
+            if ($this->compilerPhase === self::PHASE_CONVERT
+                && ($this->constants[$this->escapeConstVar($name)]->codegenFinalized ?? false)) {
+                continue;
+            }
+            $this->addConstant($name, '', $const->value);
+            if ($this->compilerPhase === self::PHASE_CONVERT) {
+                $this->finalizeGlobalConstantValue($this->constants[$this->escapeConstVar($name)], $const->value);
+            }
         }
+    }
+
+    protected function finalizeGlobalConstantValue(\stdClass $constant, Node\Expr $expression): void
+    {
+        $this->resetFunction();
+        $constant->value = $this->parseIdentifier($expression);
+        $constant->initializationCode = $this->context->localVars ? $this->genScopeVarDecl() : '';
+        $constant->initializationCode .= $this->parseBeforeStmtLines();
+        $constant->afterInitializationCode = $this->parseAfterStmtLines();
+        // Clean files are not re-parsed by convert(): finalize their scalar
+        // storage types here too, keeping cold/warm declarations identical.
+        $constant->type = $this->detectStrValueType($constant->value);
+        $constant->codegenFinalized = true;
     }
 
     protected function addConstant(string $name, string $value, ?Node\Expr $valueExpr = null): void
@@ -39,6 +59,8 @@ trait DeclarationSymbolTrait
         $constInfo->namespace = $this->namespace;
         $constInfo->name = $name;
         $constInfo->sourceFile = $this->file;
+        $constInfo->initializationCode = '';
+        $constInfo->afterInitializationCode = '';
         $this->constants[$this->escapeConstVar($name)] = $constInfo;
         $this->symbolDeclInFile[$this->getConstantDependencySymbol($name)] = $this->file;
     }

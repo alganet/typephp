@@ -1571,8 +1571,20 @@ CODE;
         $code .= $this->genCompiledGeneratorFingerprintRegistration();
         $code .= '// register constants' . PHP_EOL;
         foreach ($this->constants as $name => $const) {
+            $initializationCode = $const->initializationCode ?? '';
+            $afterInitializationCode = $const->afterInitializationCode ?? '';
+            $scopedInitialization = $initializationCode !== '' || $afterInitializationCode !== '';
+            if ($scopedInitialization) {
+                // Each constant has its own temporary namespace. Declaration
+                // lowering resets temporary IDs between independent values.
+                $code .= "do {\n" . $initializationCode;
+            }
             $code .= "{$name} = {$const->value};\n";
+            $code .= $afterInitializationCode;
             $code .= 'php::fn::define(' . $this->genCharPtr($const->name, true) . ', ' . $name . ');' . PHP_EOL;
+            if ($scopedInitialization) {
+                $code .= "} while (0);\n";
+            }
         }
         $code .= '// global vars ' . PHP_EOL;
         foreach ($extensionGlobalVars as $name => $type) {

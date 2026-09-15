@@ -917,9 +917,7 @@ class Preprocessor extends CompilerBase
             if (!isset($this->constants[$key])) {
                 continue;
             }
-            $this->resetFunction();
-            $this->constants[$key]->value = $this->parseIdentifier($constant->value);
-            $this->constants[$key]->codegenFinalized = true;
+            $this->finalizeGlobalConstantValue($this->constants[$key], $constant->value);
         }
     }
 
