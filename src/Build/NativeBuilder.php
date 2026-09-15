@@ -68,12 +68,15 @@ final readonly class NativeBuilder
      *
      * @param list<array{source: string, object: string, command: string}> $tasks
      * @param null|Closure(string, string, string, list<string>, int, bool, int): void $completed
+     * @param bool $reserveSmallTaskLane Whether the size-sorted queue reserves
+     *        one worker for tasks taken from its small-file end.
      * @return array{objects: list<string>, failures: list<string>}
      */
     public function dispatchProcessParallel(
         array $tasks,
         int $jobs,
         ?Closure $completed = null,
+        bool $reserveSmallTaskLane = false,
     ): array {
         $jobs = max(1, $jobs);
         $queue = $tasks;
@@ -81,12 +84,24 @@ final readonly class NativeBuilder
         $objects = [];
         $failures = [];
         $completedCount = 0;
+        $largeTaskCount = 0;
+        $largeLaneLimit = $reserveSmallTaskLane ? max(1, $jobs - 1) : $jobs;
         $nullDevice = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
 
         try {
             while ($queue !== [] || $running !== []) {
                 while (count($running) < $jobs && $queue !== []) {
-                    $task = array_shift($queue);
+                    // The caller supplies tasks largest-first. Keep most workers
+                    // on that end to minimize the parallel tail, while one fast
+                    // lane drains the smallest end and keeps progress observable
+                    // during very expensive translation units.
+                    if ($reserveSmallTaskLane && $largeTaskCount >= $largeLaneLimit) {
+                        $task = array_pop($queue);
+                        $lane = 'small';
+                    } else {
+                        $task = array_shift($queue);
+                        $lane = 'large';
+                    }
                     $logFile = tempnam(sys_get_temp_dir(), 'typephp-compile-');
                     if ($logFile === false) {
                         $failures[] = $task['source'];
@@ -132,7 +147,11 @@ final readonly class NativeBuilder
                         'task' => $task,
                         'process' => $process,
                         'log' => $logFile,
+                        'lane' => $lane,
                     ];
+                    if ($lane === 'large') {
+                        $largeTaskCount++;
+                    }
                 }
 
                 if ($running === []) {
@@ -159,6 +178,9 @@ final readonly class NativeBuilder
                         ? []
                         : (preg_split('/\R/', rtrim($contents)) ?: []);
                     $task = $entry['task'];
+                    if ($entry['lane'] === 'large') {
+                        $largeTaskCount--;
+                    }
                     $success = $exitCode === 0 && is_file($task['object']);
                     if ($success) {
                         $objects[] = $task['object'];

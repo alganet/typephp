@@ -1179,10 +1179,14 @@ class Translator extends Preprocessor
         sort($this->registerSymbols, SORT_STRING);
         sort($this->releaseAstConstantFns, SORT_STRING);
         $this->localHeaders = $this->argInfoHeaderFiles;
+        // genExtension() is also a public code-generation entry used directly
+        // by tooling and tests, outside SourcePipelineTrait::convert(). Keep the
+        // whole-program property-default invariant local to the consumer too.
+        $this->finalizeRequestArrayDefaultMetadata();
         $this->genClassCeList();
         $this->indentLevel++;
 
-        $code = $this->genIncludeHeaderFiles(true);
+        $code = $this->genExtensionIncludeHeaderFiles();
         // Only the generated module entry allocates request-cache storage.
         // Keep <new> out of the shared PCH dependency set used by every source.
         $code .= '#include <new>' . PHP_EOL;
@@ -1909,11 +1913,16 @@ CODE;
     private function hashGeneratedCompileInput(\HashContext $context, string $file, array &$visited): void
     {
         $real = realpath($file);
-        if ($real === false || isset($visited[$real])) {
+        // Generated files can be replaced atomically while a parallel build is
+        // finishing. realpath() may therefore succeed immediately before the
+        // old directory entry disappears. Treat that race like a cache miss:
+        // an incomplete content graph cannot match metadata written from the
+        // complete graph.
+        if ($real === false || !is_file($real) || isset($visited[$real])) {
             return;
         }
         $visited[$real] = true;
-        $contents = file_get_contents($real);
+        $contents = @file_get_contents($real);
         if (!is_string($contents)) {
             return;
         }
@@ -1957,11 +1966,12 @@ CODE;
             || trim($key) !== $this->getGeneratedObjectCacheKey($sourceFile, $objectFile)) {
             return false;
         }
-        $objectMtime = filemtime($objectFile);
-        $sourceMtime = filemtime($sourceFile);
-        return $objectMtime !== false
-            && $sourceMtime !== false
-            && $objectMtime >= $sourceMtime;
+        // The key covers the compile command, source contents, and all generated
+        // project headers recursively. A regenerated file may have a newer
+        // timestamp while retaining byte-identical contents; rejecting that
+        // object would turn a generator-fingerprint change into a full native
+        // rebuild and defeat the content-addressed cache.
+        return true;
     }
 
     private function writeGeneratedObjectCacheMetadata(string $sourceFile, string $objectFile): void
@@ -2425,6 +2435,7 @@ CODE;
                     $progress->renderInPlace($absoluteCompleted, $totalFiles, 'Compiling');
                 }
             },
+            true,
         );
 
         if (!$this->noProgress) {
@@ -2475,15 +2486,21 @@ CODE;
                 return false;
             }
         }
-        $metadata = $targetFile . '.typephp-link-cache';
+        $metadata = $this->getLinkCacheMetadataFile($targetFile);
         $key = is_file($metadata) ? file_get_contents($metadata) : false;
         return is_string($key) && trim($key) === $this->getLinkCacheKey($objectFiles, $targetFile);
+    }
+
+    private function getLinkCacheMetadataFile(string $targetFile): string
+    {
+        return $this->getBuildDir() . DIRECTORY_SEPARATOR
+            . basename($targetFile) . '.typephp-link-cache';
     }
 
     /** @param list<string> $objectFiles */
     private function writeLinkCache(array $objectFiles, string $targetFile): void
     {
-        $metadata = $targetFile . '.typephp-link-cache';
+        $metadata = $this->getLinkCacheMetadataFile($targetFile);
         if (file_put_contents($metadata, $this->getLinkCacheKey($objectFiles, $targetFile) . PHP_EOL) === false) {
             throw new \RuntimeException('Cannot write link cache metadata: ' . $metadata);
         }
@@ -2992,7 +3009,73 @@ CODE;
 
     public function genIncludeHeaderFiles(bool $allDeclarations = false): string
     {
-        $globalHeaders = $this->isNanoMode()
+        $globalHeaders = $this->getGeneratedSourceGlobalHeaders();
+        if ($this->declarationHeaderFiles === []) {
+            $declarationHeaders = [
+                "php_{$this->targetName}_func_decl.h",
+                "php_{$this->targetName}_data_decl.h",
+            ];
+        } elseif ($allDeclarations) {
+            $declarationHeaders = [
+                $this->getRuntimeDeclarationHeaderName(),
+                ...array_values($this->declarationHeaderFiles),
+            ];
+        } else {
+            $declarationHeaders = [
+                $this->getRuntimeDeclarationHeaderName(),
+                ...$this->getDeclarationHeadersForFile($this->file),
+            ];
+        }
+        return $this->renderIncludeHeaderFiles([
+            ...$globalHeaders,
+            ...$declarationHeaders,
+            ...$this->localHeaders,
+        ]);
+    }
+
+    /**
+     * The module entry aggregates Zend arginfo and registration helpers, but it
+     * does not call every compiled php_* function. Pulling every per-source
+     * declaration into this translation unit made an unrelated declaration
+     * change invalidate the large extension object and greatly increased C++
+     * parsing work. Project-wide runtime storage is declared by runtime_decl;
+     * the generated arginfo headers provide the Zend-facing symbols themselves.
+     */
+    private function genExtensionIncludeHeaderFiles(): string
+    {
+        if ($this->declarationHeaderFiles === []) {
+            $declarationHeaders = [
+                "php_{$this->targetName}_func_decl.h",
+                "php_{$this->targetName}_data_decl.h",
+            ];
+        } else {
+            $declarationHeaders = [$this->getRuntimeDeclarationHeaderName()];
+            // Generated arginfo registration helpers call compile-time
+            // attribute factories directly to materialize lazy values such as
+            // enum cases. Include only the declaration owners of those helper
+            // functions instead of every PHP declaration header.
+            foreach ($this->symbols->functions() as $functionDef) {
+                if (!$functionDef->attributeFactory) {
+                    continue;
+                }
+                $header = $this->declarationHeaderFiles[$functionDef->sourceFile] ?? null;
+                if ($header !== null) {
+                    $declarationHeaders[] = $header;
+                }
+            }
+        }
+
+        return $this->renderIncludeHeaderFiles([
+            ...$this->getGeneratedSourceGlobalHeaders(),
+            ...$declarationHeaders,
+            ...$this->localHeaders,
+        ]);
+    }
+
+    /** @return list<string> */
+    private function getGeneratedSourceGlobalHeaders(): array
+    {
+        return $this->isNanoMode()
             ? [
                 'cstring',
                 'phpx.h',
@@ -3014,23 +3097,11 @@ CODE;
                 'std/random.h',
             ]
             : $this->globalHeaders;
-        if ($this->declarationHeaderFiles === []) {
-            $declarationHeaders = [
-                "php_{$this->targetName}_func_decl.h",
-                "php_{$this->targetName}_data_decl.h",
-            ];
-        } elseif ($allDeclarations) {
-            $declarationHeaders = [
-                $this->getRuntimeDeclarationHeaderName(),
-                ...array_values($this->declarationHeaderFiles),
-            ];
-        } else {
-            $declarationHeaders = [
-                $this->getRuntimeDeclarationHeaderName(),
-                ...$this->getDeclarationHeadersForFile($this->file),
-            ];
-        }
-        $headers = array_merge($globalHeaders, $declarationHeaders, $this->localHeaders);
+    }
+
+    /** @param list<string> $headers */
+    private function renderIncludeHeaderFiles(array $headers): string
+    {
         $headers = array_values(array_unique($headers));
         $lines = [];
         foreach ($headers as $header) {
@@ -3063,6 +3134,31 @@ CODE;
     private function getRequestArrayDefaultInitializerName(ClassDef $classDef): string
     {
         return 'typephp_ensure_request_array_defaults_' . $classDef->getNamespacedName();
+    }
+
+    /**
+     * Finalize whole-program metadata required to materialize non-empty array
+     * property defaults. This cannot be a side effect of per-file conversion:
+     * an incrementally reused file does not run genClassWrapper(), while the
+     * regenerated extension source still needs the custom object allocator.
+     */
+    protected function finalizeRequestArrayDefaultMetadata(): void
+    {
+        foreach ($this->symbols->classes() as $classDef) {
+            if ($classDef->trait !== null || $classDef->nativeObject) {
+                continue;
+            }
+            foreach ($classDef->properties as $property) {
+                if ($property->isStatic() || !$property->requiresRuntimeDefaultInit) {
+                    continue;
+                }
+                $property->runtimeDefaultOffset = $this->getPropertyOffset(
+                    $classDef->getNamespacedName(false),
+                    $property->name,
+                );
+                $classDef->requireCtor = true;
+            }
+        }
     }
 
     private function getRequestArrayDefaultTemplateName(ClassDef $classDef, PropertyDef $property): string
@@ -5729,19 +5825,6 @@ CODE;
         if ($classDef instanceof ClassDef && $classDef->trait === null) {
             if ($classDef->nativeObject) {
                 return '';
-            }
-            $defaultPropCount = 0;
-            foreach ($classDef->properties as $property) {
-                if (!$property->isStatic() && $property->requiresRuntimeDefaultInit) {
-                    $property->runtimeDefaultOffset = $this->getPropertyOffset(
-                        $classDef->getNamespacedName(false),
-                        $property->name,
-                    );
-                    $defaultPropCount++;
-                }
-            }
-            if ($defaultPropCount > 0) {
-                $classDef->requireCtor = true;
             }
             $methods = $classDef->methods;
             foreach ($methods as $methodDef) {

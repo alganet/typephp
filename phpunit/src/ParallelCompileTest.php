@@ -89,6 +89,43 @@ final class ParallelCompileTest extends TestCase
         self::assertStringContainsString('compiler-error', implode("\n", $completion['output']));
     }
 
+    public function testProcessPoolCanReserveOneLaneForSmallTasks(): void
+    {
+        $smallMarker = $this->directory . '/small.ready';
+        $largeObject = $this->directory . '/large.o';
+        $middleObject = $this->directory . '/middle.o';
+        $smallObject = $this->directory . '/small.o';
+
+        $builder = new NativeBuilder($this->createMock(CompilerBackend::class));
+        $result = $builder->dispatchProcessParallel(
+            [
+                $this->task(
+                    'large.cc',
+                    $largeObject,
+                    $this->waitForFileCommand($smallMarker, $largeObject),
+                ),
+                $this->task(
+                    'middle.cc',
+                    $middleObject,
+                    $this->waitForFileCommand($largeObject, $middleObject),
+                ),
+                $this->task(
+                    'small.cc',
+                    $smallObject,
+                    $this->createFilesCommand([$smallMarker, $smallObject]),
+                ),
+            ],
+            2,
+            reserveSmallTaskLane: true,
+        );
+
+        self::assertSame([], $result['failures']);
+        self::assertEqualsCanonicalizing(
+            [$largeObject, $middleObject, $smallObject],
+            $result['objects'],
+        );
+    }
+
     /** @return array{source: string, object: string, command: string} */
     private function task(string $source, string $object, string $command): array
     {
@@ -102,6 +139,26 @@ final class ParallelCompileTest extends TestCase
             . 'while (file_exists(' . var_export($otherMarker, true) . ') === false && microtime(true) < $deadline) {'
             . ' usleep(10000); }'
             . 'if (file_exists(' . var_export($otherMarker, true) . ') === false) { exit(9); }'
+            . 'file_put_contents(' . var_export($object, true) . ", 'object');";
+        return $this->phpCommand($code);
+    }
+
+    /** @param list<string> $files */
+    private function createFilesCommand(array $files): string
+    {
+        $code = '';
+        foreach ($files as $file) {
+            $code .= 'file_put_contents(' . var_export($file, true) . ", 'ready');";
+        }
+        return $this->phpCommand($code);
+    }
+
+    private function waitForFileCommand(string $dependency, string $object): string
+    {
+        $code = '$deadline = microtime(true) + 2;'
+            . 'while (file_exists(' . var_export($dependency, true) . ') === false && microtime(true) < $deadline) {'
+            . ' usleep(10000); }'
+            . 'if (file_exists(' . var_export($dependency, true) . ') === false) { exit(9); }'
             . 'file_put_contents(' . var_export($object, true) . ", 'object');";
         return $this->phpCommand($code);
     }

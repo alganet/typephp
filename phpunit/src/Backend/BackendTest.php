@@ -330,6 +330,26 @@ class BackendTest extends TestCase
         $this->assertSame('"' . $objectWithoutSpace . '"', $lines[1]);
     }
 
+    public function testResponseFileCanBePlacedInTheBuildDirectory(): void
+    {
+        $platform = new Linux();
+        $compiler = new Gcc($platform, 'g++');
+        $dir = $this->createTemporaryDirectory('backend response build directory');
+        $target = $dir . '/output/my app';
+        $rspFile = $dir . '/build/my app.rsp';
+        $object = $dir . '/object.o';
+
+        $cmd = $compiler->buildLinkCommand(
+            [$object],
+            $target,
+            ['response_file' => $rspFile],
+        );
+
+        $this->assertStringContainsString(escapeshellarg('@' . $rspFile), $cmd);
+        $this->assertFileExists($rspFile);
+        $this->assertFileDoesNotExist($target . '.rsp');
+    }
+
     /**
      * 测试 Clang 编译器基本信息
      */

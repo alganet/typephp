@@ -337,6 +337,27 @@ trait IncrementalCompilationTrait
             'literalStrings' => !$this->noLiteralStrings,
             'debug' => $this->debug,
         ]));
+
+        // A compiled tpc executable is an immutable snapshot of the generator.
+        // Walking and hashing every compiler PHP source on each consumer build
+        // is both unnecessary and disproportionately expensive through the AOT
+        // Zend bridge. Fingerprint the executable snapshot with one native hash
+        // operation instead. The interpreted development entry keeps the source
+        // walk below so edits invalidate generated-code caches immediately.
+        if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')
+            && defined('TYPEPHP_COMPILER_EXECUTABLE')) {
+            $executable = constant('TYPEPHP_COMPILER_EXECUTABLE');
+            if (is_string($executable) && is_file($executable)) {
+                hash_update($context, str_replace('\\', '/', $executable) . "\0");
+                if (!hash_update_file($context, $executable)) {
+                    throw new \RuntimeException(
+                        'Cannot fingerprint TypePHP compiler executable: ' . $executable,
+                    );
+                }
+                return hash_final($context);
+            }
+        }
+
         $sourceDirectory = dirname(__DIR__);
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($sourceDirectory, \FilesystemIterator::SKIP_DOTS),

@@ -79,6 +79,9 @@ PHP);
             $this->buildDirectory . '/include/php_incremental_runtime_decl.h',
         );
         $consumerCode = (string) file_get_contents($consumerCpp);
+        $extensionCode = (string) file_get_contents(
+            $this->buildDirectory . '/extension-incremental.cc',
+        );
         self::assertStringContainsString('php_incremental__answer(', $providerDeclarations);
         self::assertStringContainsString('_const_var_Incremental__LIMIT', $providerDeclarations);
         self::assertStringContainsString('_global_var_shared', $providerDeclarations);
@@ -93,6 +96,22 @@ PHP);
         self::assertStringContainsString(
             '#include <' . basename($consumerHeader) . '>',
             $consumerCode,
+        );
+        self::assertStringContainsString(
+            '#include <php_incremental_runtime_decl.h>',
+            $extensionCode,
+        );
+        self::assertStringContainsString(
+            '#include <' . basename($compiler->getArgInfoHeaderFile($this->provider)) . '>',
+            $extensionCode,
+        );
+        self::assertStringNotContainsString(
+            '#include <' . basename($providerHeader) . '>',
+            $extensionCode,
+        );
+        self::assertStringNotContainsString(
+            '#include <' . basename($consumerHeader) . '>',
+            $extensionCode,
         );
 
         $symbols = $this->property($compiler, 'symbolDeclInFile');
@@ -118,28 +137,89 @@ PHP);
         );
     }
 
-    public function testChangedDeclarationRegeneratesItsTransitiveConsumersOnly(): void
+    public function testGeneratorFingerprintChangeKeepsIdenticalCppTimestamps(): void
     {
         $first = $this->convertProject();
-        $providerCpp = $this->invoke($first, 'getCppFile', $this->provider);
-        $consumerCpp = $this->invoke($first, 'getCppFile', $this->consumer);
-        $independentCpp = $this->invoke($first, 'getCppFile', $this->independent);
+        $generatedFiles = [
+            $this->invoke($first, 'getCppFile', $this->provider),
+            $this->invoke($first, 'getCppFile', $this->consumer),
+            $this->invoke($first, 'getCppFile', $this->independent),
+        ];
         $oldTimestamp = 1_600_000_000;
-        foreach ([$providerCpp, $consumerCpp, $independentCpp] as $cppFile) {
-            touch($cppFile, $oldTimestamp);
+        foreach ($generatedFiles as $generatedFile) {
+            touch($generatedFile, $oldTimestamp);
         }
-        file_put_contents($this->provider, "\n// changed provider\n", FILE_APPEND);
+
+        $stateFile = $this->buildDirectory . '/cache/incremental/incremental/build-state.json';
+        $state = json_decode((string) file_get_contents($stateFile), true, flags: JSON_THROW_ON_ERROR);
+        $state['generatorFingerprint'] = str_repeat('0', 64);
+        file_put_contents(
+            $stateFile,
+            json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL,
+        );
         clearstatcache();
 
         $this->convertProject();
 
         clearstatcache();
-        self::assertGreaterThan($oldTimestamp, filemtime($providerCpp));
-        self::assertGreaterThan($oldTimestamp, filemtime($consumerCpp));
+        foreach ($generatedFiles as $generatedFile) {
+            self::assertSame($oldTimestamp, filemtime($generatedFile));
+        }
+    }
+
+    public function testRegenerationKeepsTimestampsForIdenticalGeneratedContents(): void
+    {
+        $first = $this->convertProject();
+        $providerCpp = $this->invoke($first, 'getCppFile', $this->provider);
+        $providerHeader = $first->getDeclarationHeaderFile($this->provider);
+        $consumerCpp = $this->invoke($first, 'getCppFile', $this->consumer);
+        $independentCpp = $this->invoke($first, 'getCppFile', $this->independent);
+        $oldTimestamp = 1_600_000_000;
+        foreach ([$providerCpp, $providerHeader, $consumerCpp, $independentCpp] as $generatedFile) {
+            touch($generatedFile, $oldTimestamp);
+        }
+        $providerSource = (string) file_get_contents($this->provider);
+        file_put_contents($this->provider, str_replace('const LIMIT = 42;', 'const LIMIT = 43;', $providerSource));
+        clearstatcache();
+
+        $this->convertProject();
+
+        clearstatcache();
+        self::assertGreaterThan($oldTimestamp, filemtime($providerHeader));
+        self::assertSame($oldTimestamp, filemtime($providerCpp));
+        // The dependency graph still regenerates the consumer, but its own C++
+        // bytes only include the provider header by its stable name. Preserve
+        // the timestamp; the changed header content invalidates its object key.
+        self::assertSame($oldTimestamp, filemtime($consumerCpp));
         self::assertSame($oldTimestamp, filemtime($independentCpp));
     }
 
-    public function testGeneratedObjectCacheRequiresAnObjectNotOlderThanItsCppSource(): void
+    public function testCachedClassKeepsRuntimeArrayPropertyDefaultAllocator(): void
+    {
+        file_put_contents($this->independent, <<<'PHP'
+<?php
+
+final class IncrementalDefaults
+{
+    protected array $values = ['ready'];
+}
+PHP);
+
+        $this->convertProject();
+        $this->convertProject();
+
+        $extensionCode = (string) file_get_contents(
+            $this->buildDirectory . '/extension-incremental.cc',
+        );
+        $initializer = 'typephp_ensure_request_array_defaults_IncrementalDefaults()';
+        self::assertSame(2, substr_count($extensionCode, $initializer));
+        self::assertStringContainsString(
+            'php_class_entry_IncrementalDefaults->create_object =',
+            $extensionCode,
+        );
+    }
+
+    public function testGeneratedObjectCacheUsesContentRatherThanSourceTimestamp(): void
     {
         $compiler = $this->convertProject();
         $consumerCpp = $this->invoke($compiler, 'getCppFile', $this->consumer);
@@ -165,11 +245,16 @@ PHP);
 
         touch($consumerCpp, $objectTimestamp + 1);
         clearstatcache();
+        self::assertTrue(
+            $this->invoke($compiler, 'hasGeneratedObjectFileCache', $consumerCpp, $consumerObject),
+        );
+
+        file_put_contents($consumerCpp, "\n// changed generated input\n", FILE_APPEND);
+        clearstatcache();
         self::assertFalse(
             $this->invoke($compiler, 'hasGeneratedObjectFileCache', $consumerCpp, $consumerObject),
         );
 
-        touch($consumerCpp, $sourceTimestamp);
         unlink($consumerObject);
         clearstatcache();
         self::assertFalse(
@@ -200,6 +285,10 @@ PHP);
 
         $objects = [$firstObject, $secondObject];
         $this->invoke($compiler, 'writeLinkCache', $objects, $target);
+        self::assertFileExists(
+            $this->buildDirectory . '/incremental-bin.typephp-link-cache',
+        );
+        self::assertFileDoesNotExist($target . '.typephp-link-cache');
         self::assertTrue($this->invoke($compiler, 'hasLinkCache', $objects, $target));
 
         touch($secondObject, $timestamp + 1);

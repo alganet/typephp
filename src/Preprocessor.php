@@ -1050,83 +1050,129 @@ class Preprocessor extends CompilerBase
      */
     protected function findSymbolUsing(NodeAbstract|array $ast): void
     {
-        $nodeFinder = new NodeFinder();
-        $functionCalls = $nodeFinder->findInstanceOf($ast, Node\Expr\FuncCall::class);
+        // NodeFinder performs a complete recursive walk for every requested
+        // node type. Collect the same category groups in one depth-first walk,
+        // then process them in the historical order so dependency/header order
+        // and stable-ID allocation remain reproducible.
+        $groups = array_fill(0, 13, []);
+        $nodes = is_array($ast) ? array_reverse(array_values($ast)) : [$ast];
+        while ($nodes !== []) {
+            $node = array_pop($nodes);
+            if (!$node instanceof NodeAbstract) {
+                continue;
+            }
 
-        foreach ($functionCalls as $call) {
-            if ($call->name instanceof Node\Name) {
-                // Internal functions do not participate in dependency management
-                $resolvedName = $call->name->getAttribute('resolvedName')
-                    ?? $call->name->getAttribute('namespacedName')
-                    ?? $call->name;
-                $funcName = strtolower($resolvedName->toString());
-                if (!$this->isInternalFunction($funcName)) {
-                    $this->symbolCallInFile[$this->file][] = $this->getFunctionDependencySymbol($funcName);
+            $group = match (true) {
+                $node instanceof Node\Expr\FuncCall => 0,
+                $node instanceof Node\Expr\ConstFetch => 1,
+                $node instanceof Node\Expr\StaticCall => 2,
+                $node instanceof Node\Expr\StaticPropertyFetch => 3,
+                $node instanceof Node\Expr\ClassConstFetch => 4,
+                $node instanceof Node\Expr\New_ => 5,
+                $node instanceof Node\Expr\Instanceof_ => 6,
+                $node instanceof Node\FunctionLike => 7,
+                $node instanceof Node\Stmt\Property => 8,
+                $node instanceof Node\Stmt\ClassConst => 9,
+                $node instanceof Node\Stmt\Catch_ => 10,
+                $node instanceof Node\Attribute => 11,
+                $node instanceof Node\Stmt\Global_ => 12,
+                default => null,
+            };
+            if ($group !== null) {
+                $groups[$group][] = $node;
+            }
+
+            $children = [];
+            foreach ($node->getSubNodeNames() as $name) {
+                $child = $node->{$name};
+                if ($child instanceof NodeAbstract) {
+                    $children[] = $child;
+                    continue;
+                }
+                if (!is_array($child)) {
+                    continue;
+                }
+                foreach ($child as $item) {
+                    if ($item instanceof NodeAbstract) {
+                        $children[] = $item;
+                    }
                 }
             }
+            for ($index = count($children) - 1; $index >= 0; --$index) {
+                $nodes[] = $children[$index];
+            }
         }
+        foreach ($groups as $nodesInGroup) {
+            foreach ($nodesInGroup as $node) {
+                $this->recordSymbolUsingNode($node);
+            }
+        }
+        $this->deduplicateCurrentFileSymbolDependencies();
+    }
 
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Expr\ConstFetch::class) as $fetch) {
-            $resolvedName = $fetch->name->getAttribute('resolvedName')
-                ?? $fetch->name->getAttribute('namespacedName')
-                ?? $fetch->name;
-            $constant = $resolvedName->toString();
-            if (!in_array(strtolower($constant), ['true', 'false', 'null'], true)) {
-                $this->symbolCallInFile[$this->file][] = $this->getConstantDependencySymbol($constant);
+    protected function recordSymbolUsingNode(Node $node): void
+    {
+        if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Node\Name) {
+            // Internal functions do not participate in dependency management
+            $resolvedName = $node->name->getAttribute('resolvedName')
+                ?? $node->name->getAttribute('namespacedName')
+                ?? $node->name;
+            $funcName = strtolower($resolvedName->toString());
+            if (!$this->isInternalFunction($funcName)) {
+                $this->symbolCallInFile[$this->file][] = $this->getFunctionDependencySymbol($funcName);
             }
-        }
-
-        $depClasses = [];
-        $depClasses = array_merge($depClasses, $nodeFinder->findInstanceOf($ast, Node\Expr\StaticCall::class));
-        $depClasses = array_merge($depClasses, $nodeFinder->findInstanceOf($ast, Node\Expr\StaticPropertyFetch::class));
-        $depClasses = array_merge($depClasses, $nodeFinder->findInstanceOf($ast, Node\Expr\ClassConstFetch::class));
-        $depClasses = array_merge($depClasses, $nodeFinder->findInstanceOf($ast, Node\Expr\New_::class));
-        foreach ($depClasses as $call) {
-            if ($call->class instanceof Node\Name) {
-                $resolvedClass = $call->class->getAttribute('resolvedName')
-                    ?? $call->class->getAttribute('namespacedName')
-                    ?? $call->class;
-                $className = $resolvedClass->toString();
-                if ($className !== 'self' && $className !== 'static') {
-                    $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($className);
-                }
+        } elseif ($node instanceof Node\Expr\ConstFetch) {
+            $resolvedName = $node->name->getAttribute('resolvedName')
+                ?? $node->name->getAttribute('namespacedName')
+                ?? $node->name;
+            $constantName = $resolvedName->toString();
+            if (!in_array(strtolower($constantName), ['true', 'false', 'null'], true)) {
+                $this->symbolCallInFile[$this->file][] = $this->getConstantDependencySymbol($constantName);
             }
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Expr\Instanceof_::class) as $instanceof) {
-            if ($instanceof->class instanceof Node\Name) {
-                $this->recordClassTypeDependency($instanceof->class);
+        } elseif (($node instanceof Node\Expr\StaticCall
+                || $node instanceof Node\Expr\StaticPropertyFetch
+                || $node instanceof Node\Expr\ClassConstFetch
+                || $node instanceof Node\Expr\New_)
+            && $node->class instanceof Node\Name
+        ) {
+            $resolvedClass = $node->class->getAttribute('resolvedName')
+                ?? $node->class->getAttribute('namespacedName')
+                ?? $node->class;
+            $className = $resolvedClass->toString();
+            if ($className !== 'self' && $className !== 'static') {
+                $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($className);
             }
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\FunctionLike::class) as $functionLike) {
-            $this->recordClassTypeDependency($functionLike->getReturnType());
-            foreach ($functionLike->getParams() as $parameter) {
+        } elseif ($node instanceof Node\Expr\Instanceof_ && $node->class instanceof Node\Name) {
+            $this->recordClassTypeDependency($node->class);
+        } elseif ($node instanceof Node\FunctionLike) {
+            $this->recordClassTypeDependency($node->getReturnType());
+            foreach ($node->getParams() as $parameter) {
                 $this->recordClassTypeDependency($parameter->type);
             }
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\Property::class) as $property) {
-            $this->recordClassTypeDependency($property->type);
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\ClassConst::class) as $constant) {
-            $this->recordClassTypeDependency($constant->type);
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\Catch_::class) as $catch) {
-            foreach ($catch->types as $type) {
+        } elseif ($node instanceof Node\Stmt\Property) {
+            $this->recordClassTypeDependency($node->type);
+        } elseif ($node instanceof Node\Stmt\ClassConst) {
+            $this->recordClassTypeDependency($node->type);
+        } elseif ($node instanceof Node\Stmt\Catch_) {
+            foreach ($node->types as $type) {
                 $this->recordClassTypeDependency($type);
             }
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Attribute::class) as $attribute) {
-            $this->recordClassTypeDependency($attribute->name);
-        }
-        foreach ($nodeFinder->findInstanceOf($ast, Node\Stmt\Global_::class) as $global) {
-            foreach ($global->vars as $variable) {
-                if ($variable instanceof Node\Expr\Variable && is_string($variable->name)) {
-                    $this->symbolCallInFile[$this->file][] = $this->getGlobalDependencySymbol(
-                        $this->escapeVarName($variable->name),
-                    );
+        } elseif ($node instanceof Node\Attribute) {
+            $this->recordClassTypeDependency($node->name);
+        } elseif ($node instanceof Node\Stmt\Global_) {
+            foreach ($node->vars as $variable) {
+                if (!$variable instanceof Node\Expr\Variable || !is_string($variable->name)) {
+                    continue;
                 }
+                $this->symbolCallInFile[$this->file][] = $this->getGlobalDependencySymbol(
+                    $this->escapeVarName($variable->name),
+                );
             }
         }
-        // Deduplicate dependencies
+    }
+
+    private function deduplicateCurrentFileSymbolDependencies(): void
+    {
         $this->symbolCallInFile[$this->file] = array_values(array_unique($this->symbolCallInFile[$this->file]));
     }
 

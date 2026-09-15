@@ -176,7 +176,11 @@ class Msvc extends CompilerBackend
     public function buildLinkCommand(array $objectFiles, string $outputFile, array $options = []): string
     {
         $cmd = $this->getLinkerCommand();
-        $cmd .= ' ' . $this->createResponseFile($objectFiles, $outputFile);
+        $cmd .= ' ' . $this->createResponseFile(
+            $objectFiles,
+            $outputFile,
+            $options['response_file'] ?? null,
+        );
         $cmd .= ' /OUT:' . escapeshellarg($outputFile);
 
         if (!empty($options['debug'])) {

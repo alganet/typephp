@@ -20,6 +20,13 @@ function main(int $argc, array $argv): void
     if (!defined('TYPEPHP_DEBUG')) {
         define('TYPEPHP_DEBUG', true);
     }
+    if (!defined('TYPEPHP_COMPILER_EXECUTABLE')) {
+        $compilerExecutable = realpath($argv[0]);
+        define(
+            'TYPEPHP_COMPILER_EXECUTABLE',
+            $compilerExecutable !== false ? $compilerExecutable : $argv[0],
+        );
+    }
 
     // The Zend PHP entrypoint loads the consumer project's Composer autoloader
     // in bin/bootstrap.php. The AOT compiler starts here directly and therefore
@@ -44,7 +51,13 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    if (shouldCompileNativeSourceProject($argv)) {
+    try {
+        $nativeSourceProject = shouldCompileNativeSourceProject($argv);
+    } catch (RuntimeException $exception) {
+        fwrite(STDERR, 'Native source build failed: ' . $exception->getMessage() . "\n");
+        exit(1);
+    }
+    if ($nativeSourceProject) {
         compileNativeSourceProject($argv);
         return;
     }

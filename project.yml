@@ -2,6 +2,7 @@ name: tpc
 build-mode: bin
 version: 0.9.0
 cxx-std: c++17
+optimize: 2
 cxx-flags:
   - -Wall
 

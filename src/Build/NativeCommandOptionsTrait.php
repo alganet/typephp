@@ -187,6 +187,8 @@ trait NativeCommandOptionsTrait
             'sanitize' => $this->sanitize,
             'lto' => $this->enableLto,
             'target_platform' => $targetPlatform,
+            'response_file' => $this->getBuildDir() . DIRECTORY_SEPARATOR
+                . basename($this->getTargetFileName()) . '.rsp',
         ];
 
         $rpaths = $this->isNanoMode()
