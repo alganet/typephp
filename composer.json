@@ -22,9 +22,8 @@
     "marcj/topsort": "^2.0",
     "symfony/var-dumper": "^8.0",
     "symfony/yaml": "^8.0",
-    "swoole/phpx": "~2.8.1",
-    "ajaxray/ansikit": "^0.3",
-    "ext-dom": "*"
+    "swoole/phpx": "~2.8.2",
+    "ajaxray/ansikit": "^0.3"
   },
   "require-dev": {
     "phpunit/phpunit": "^10.4",
