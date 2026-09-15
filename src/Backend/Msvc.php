@@ -36,7 +36,8 @@ class Msvc extends CompilerBackend
 
     private function buildCommonCompileFlags(array $config, bool $includeCppOptions = true): string
     {
-        $cmd = '';
+        // Generated code/templates can exceed ordinary COFF section limits.
+        $cmd = ' /bigobj';
 
         $cmd .= ' /utf-8 /DZEND_WIN32 /DPHP_WIN32 /DZEND_DEBUG=0 /DENABLE_INTSAFE_SIGNED_FUNCTIONS';
 

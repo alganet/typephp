@@ -316,6 +316,112 @@ PHP);
         self::assertDirectoryDoesNotExist($incrementalDirectory);
     }
 
+    private function prepareNativeStub(): void
+    {
+        $stub = $this->directory . '/provider.stub.php';
+        rename($this->provider, $stub);
+        $this->provider = $stub;
+        file_put_contents($stub, '<?php namespace Incremental; function answer(int $value = 42): int {}');
+        file_put_contents($this->consumer, '<?php function main(): int { return \\Incremental\\answer(); }');
+    }
+
+    public function testStubDeclarationsAreGeneratedWithoutConvertingStubBodies(): void
+    {
+        $this->prepareNativeStub();
+        $first = $this->convertProject();
+        $header = $first->getDeclarationHeaderFile($this->provider);
+        self::assertFileExists($header);
+        self::assertStringContainsString('php_incremental__answer(', file_get_contents($header));
+        self::assertStringContainsString('#include <' . basename($header) . '>',
+            file_get_contents($first->getDeclarationHeaderFile($this->consumer)));
+        self::assertFileDoesNotExist($this->invoke($first, 'getCppFile', $this->provider));
+        self::assertFileExists($first->getArgInfoHeaderFile($this->provider));
+        $extension = $this->buildDirectory . '/extension-incremental.cc';
+        $extensionCode = file_get_contents($extension);
+        self::assertStringContainsString('ZEND_FUNCTION(incremental_answer)', $extensionCode);
+        self::assertStringContainsString('#include <' . basename($first->getArgInfoHeaderFile($this->provider)) . '>', $extensionCode);
+        $state = json_decode(file_get_contents($this->buildDirectory . '/cache/incremental/incremental/build-state.json'), true);
+        self::assertFalse($state['files'][$this->provider]['emitsTranslationUnit']);
+        self::assertContains($this->provider, $state['files'][$this->consumer]['dependencies']);
+        $second = $this->convertProject();
+        self::assertFalse($this->invoke($second, 'shouldRegeneratePhpFile', $this->provider));
+        self::assertFalse($this->invoke($second, 'shouldRegeneratePhpFile', $this->consumer));
+        self::assertSame($extensionCode, file_get_contents($extension));
+    }
+
+    public function testStubChangePreservingMtimeInvalidatesTheConsumer(): void
+    {
+        $this->prepareNativeStub();
+        $this->convertProject();
+        $extension = $this->buildDirectory . '/extension-incremental.cc';
+        $oldCode = file_get_contents($extension);
+        $mtime = filemtime($this->provider);
+        file_put_contents($this->provider, str_replace('42', '43', file_get_contents($this->provider)));
+        touch($this->provider, $mtime);
+        clearstatcache();
+        $second = $this->convertProject();
+        self::assertTrue($this->invoke($second, 'shouldRegeneratePhpFile', $this->provider));
+        self::assertTrue($this->invoke($second, 'shouldRegeneratePhpFile', $this->consumer));
+        self::assertNotSame($oldCode, file_get_contents($extension));
+        self::assertStringContainsString('43', file_get_contents($extension));
+    }
+
+    public function testMissingStubHeaderIsRegeneratedAndInvalidatesConsumers(): void
+    {
+        $this->prepareNativeStub();
+        $first = $this->convertProject();
+        unlink($first->getDeclarationHeaderFile($this->provider));
+        $second = $this->convertProject();
+        self::assertFileExists($second->getDeclarationHeaderFile($this->provider));
+        self::assertTrue($this->invoke($second, 'shouldRegeneratePhpFile', $this->consumer));
+    }
+
+    public function testMissingStubArginfoIsRegeneratedAndInvalidatesConsumers(): void
+    {
+        $this->prepareNativeStub();
+        $first = $this->convertProject();
+        unlink($first->getArgInfoHeaderFile($this->provider));
+        $second = $this->convertProject();
+        self::assertFileExists($second->getArgInfoHeaderFile($this->provider));
+        self::assertTrue($this->invoke($second, 'shouldRegeneratePhpFile', $this->consumer));
+    }
+
+    public function testImportedClassMetadataAndCallbacksStayInTheExtension(): void
+    {
+        $this->prepareNativeStub();
+        file_put_contents($this->provider, <<<'PHP'
+<?php
+/** @import-library */
+namespace Incremental;
+function answer(int $value = 42): int {}
+final class Counter
+{
+    public int $value = 0;
+    public function add(int $delta): int {}
+}
+PHP);
+        file_put_contents($this->consumer, <<<'PHP'
+<?php
+function main(): int
+{
+    $counter = new \Incremental\Counter();
+    return $counter->add(1) + \Incremental\answer();
+}
+PHP);
+        $first = $this->convertProject();
+        $arginfo = $first->getArgInfoHeaderFile($this->provider);
+        $extension = $this->buildDirectory . '/extension-incremental.cc';
+        $extensionCode = file_get_contents($extension);
+        self::assertStringContainsString('php_register_class_Incremental_Counter', file_get_contents($arginfo));
+        self::assertStringContainsString('ZEND_METHOD(Incremental_Counter, add)', $extensionCode);
+        self::assertStringContainsString('php_incremental__counter__add(this_, arg_delta)', $extensionCode);
+        self::assertStringContainsString('#include <' . basename($arginfo) . '>', $extensionCode);
+        self::assertStringNotContainsString(basename($arginfo), file_get_contents($this->invoke($first, 'getCppFile', $this->consumer)));
+        self::assertFileDoesNotExist($this->invoke($first, 'getCppFile', $this->provider));
+        $this->convertProject();
+        self::assertSame($extensionCode, file_get_contents($extension));
+    }
+
     private function convertProject(): CompilerTest
     {
         global $translator;

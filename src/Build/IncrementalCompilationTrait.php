@@ -20,6 +20,26 @@ trait IncrementalCompilationTrait
     private string $incrementalGeneratorFingerprint = '';
     private bool $incrementalPlanInitialized = false;
 
+    /**
+     * Stubs provide declarations without emitting a body translation unit.
+     * Include them in header generation and dependency invalidation as well.
+     * @param list<string> $files
+     * @return list<string>
+     */
+    private function getDeclarationInputFiles(array $files): array
+    {
+        $inputs = [];
+        foreach ($files as $file) {
+            $inputs[realpath($file) ?: $file] = true;
+        }
+        foreach ($this->preparedFileAsts as $file => $_ast) {
+            if ($this->isStubFile($file)) {
+                $inputs[$file] = true;
+            }
+        }
+        return array_keys($inputs);
+    }
+
     /** @param list<string> $files */
     protected function initializeIncrementalCompilation(array $files): void
     {
@@ -29,7 +49,7 @@ trait IncrementalCompilationTrait
         $this->incrementalDirtyFiles = [];
 
         $phpFiles = [];
-        foreach ($files as $file) {
+        foreach ($this->getDeclarationInputFiles($files) as $file) {
             if (!FileScanner::isPhpFile($file)) {
                 continue;
             }
@@ -112,7 +132,7 @@ trait IncrementalCompilationTrait
         if (!$this->incrementalPlanInitialized) {
             return;
         }
-        foreach ($files as $file) {
+        foreach ($this->getDeclarationInputFiles($files) as $file) {
             if (!FileScanner::isPhpFile($file)) {
                 continue;
             }
@@ -198,7 +218,7 @@ trait IncrementalCompilationTrait
         }
         $this->rebuildIncrementalGlobalState();
         $phpFiles = [];
-        foreach ($files as $file) {
+        foreach ($this->getDeclarationInputFiles($files) as $file) {
             if (!FileScanner::isPhpFile($file)) {
                 continue;
             }
@@ -218,7 +238,7 @@ trait IncrementalCompilationTrait
         }
         $this->rebuildIncrementalGlobalState();
         $stateFiles = [];
-        foreach ($files as $file) {
+        foreach ($this->getDeclarationInputFiles($files) as $file) {
             if (!FileScanner::isPhpFile($file)) {
                 continue;
             }
@@ -248,7 +268,7 @@ trait IncrementalCompilationTrait
                 'symbolsDeclared' => $declared,
                 'symbolsUsed' => $used,
                 'emitsTranslationUnit' => $this->incrementalTranslationUnits[$path]
-                    ?? (bool) ($previous['emitsTranslationUnit'] ?? false),
+                    ?? (!$this->isStubFile($path) && (bool) ($previous['emitsTranslationUnit'] ?? false)),
                 'header' => $this->getDeclarationHeaderFile($path),
                 'cpp' => $this->getCppFile($path),
                 'splitTranslationUnits' => $this->getSplitTranslationUnits($path),

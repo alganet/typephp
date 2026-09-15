@@ -368,7 +368,7 @@ trait SourcePipelineTrait
             // All declarations are now known. Lower declaration constant
             // expressions before translating any function body so cache IDs
             // are assigned exclusively in the convert phase.
-            $this->finalizeDeclarationExpressions($files);
+            $this->finalizeDeclarationExpressions($this->getDeclarationInputFiles($files));
             // Whole-program extension generation must not depend on conversion
             // side effects from dirty files. Clean incremental files are not
             // converted, but their non-empty property defaults still require a
@@ -376,6 +376,14 @@ trait SourcePipelineTrait
             $this->finalizeRequestArrayDefaultMetadata();
             $this->initializeDeclarationHeaderFiles($files);
             $this->restoreCleanIncrementalMetadata($files);
+
+            // Native/import stubs are declaration inputs, not ordinary PHP
+            // bodies. Their Zend metadata still belongs to the module entry.
+            foreach ($this->getDeclarationInputFiles($files) as $file) {
+                if ($this->isStubFile($file) && $this->shouldRegeneratePhpFile($file)) {
+                    $this->genStubFile($file);
+                }
+            }
 
             $sourceFiles = [];
             $validSourceCount = 0;

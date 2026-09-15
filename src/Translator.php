@@ -1193,6 +1193,10 @@ class Translator extends Preprocessor
         sort($this->registerSymbols, SORT_STRING);
         sort($this->releaseAstConstantFns, SORT_STRING);
         $this->localHeaders = $this->argInfoHeaderFiles;
+        // Stubs have native implementations, but still need local Zend
+        // callbacks. Generate these before sizing caches/rendering literals:
+        // parameter validation may allocate additional stable cache IDs.
+        $stubWrapperCode = $this->genStubWrappers();
         // genExtension() is also a public code-generation entry used directly
         // by tooling and tests, outside SourcePipelineTrait::convert(). Keep the
         // whole-program property-default invariant local to the consumer too.
@@ -1394,6 +1398,9 @@ CODE;
         }
 
         $code .= '}  // namespace ' . $projectNamespace . PHP_EOL . PHP_EOL;
+
+        $code .= "// native/import stub callbacks \n";
+        $code .= $stubWrapperCode;
 
         $code .= "// default argument values \n";
         $code .= $this->genDefaultArgumentHelperDefinitions();
@@ -2770,7 +2777,7 @@ CODE;
     private function initializeDeclarationHeaderFiles(array $files): void
     {
         $this->declarationHeaderFiles = [];
-        foreach ($files as $file) {
+        foreach ($this->getDeclarationInputFiles($files) as $file) {
             if (FileScanner::isPhpFile($file)) {
                 $this->declarationHeaderFiles[$file] = $this->getDeclarationHeaderFile($file, true);
             }
@@ -2831,17 +2838,14 @@ CODE;
         $this->writeFile($runtimeHeader, '#pragma once' . PHP_EOL . PHP_EOL
             . $this->renderDataDeclarations(null, true)
             . $this->genNativeObjectForwardDeclarations());
-        foreach ($files as $file) {
-            if (!isset($this->declarationHeaderFiles[$file])) {
-                continue;
-            }
+        foreach ($this->declarationHeaderFiles as $file => $header) {
             if (!$this->shouldRegeneratePhpFile($file)) {
                 continue;
             }
             $code = $this->renderFunctionDeclarations($file);
             $code .= $this->renderDataDeclarations($file);
             $this->writeFile(
-                $this->getIncludeDir() . '/' . $this->declarationHeaderFiles[$file],
+                $this->getIncludeDir() . '/' . $header,
                 $code,
                 $this->shouldRegeneratePhpFile($file),
             );
@@ -3060,6 +3064,13 @@ CODE;
             ];
         } else {
             $declarationHeaders = [$this->getRuntimeDeclarationHeaderName()];
+            // The callbacks emitted here bridge stub declarations to native
+            // C++ implementations. Arginfo remains included only by this TU.
+            foreach ($this->declarationHeaderFiles as $source => $header) {
+                if ($this->isStubFile($source)) {
+                    $declarationHeaders[] = $header;
+                }
+            }
             // Generated arginfo registration helpers call compile-time
             // attribute factories directly to materialize lazy values such as
             // enum cases. Include only the declaration owners of those helper
@@ -8408,6 +8419,29 @@ CODE;
         $cppCode .= $this->genWrapperFunctionArgs($fn, $functionDef, $functionDef->getNamespacedName());
 
         return $cppCode;
+    }
+
+    private function genStubWrappers(): string
+    {
+        $code = '';
+        foreach ($this->symbols->classes() as $classDef) {
+            if (!$this->isStubFile($classDef->sourceFile) || $classDef->nativeObject || $classDef->trait !== null) {
+                continue;
+            }
+            foreach ($classDef->methods as $methodDef) {
+                if (!$methodDef->functionDef->abstractMethod
+                    && !$this->functionUsesNativeObject($methodDef->functionDef)) {
+                    $code .= $this->genMethodWrapper($classDef, $methodDef);
+                }
+            }
+        }
+        foreach ($this->symbols->functions() as $functionDef) {
+            if ($functionDef->stub && !$functionDef->method && !$functionDef->attributeFactory
+                && !$this->functionUsesNativeObject($functionDef)) {
+                $code .= $this->genFunctionWrapper($functionDef);
+            }
+        }
+        return $code;
     }
 
     /** Return the generated C++ symbol for a hidden runtime-attribute factory. */

@@ -117,6 +117,17 @@ class BackendTest extends TestCase
         $this->assertStringNotContainsString('/std:', $cmd);
     }
 
+    public function testMsvcLargeObjectFormatAppliesToGeneratedAndNativeCommands(): void
+    {
+        $compiler = new Msvc(new Windows());
+        foreach ([false, true] as $debug) {
+            $options = ['debug' => $debug];
+            $this->assertStringContainsString('/bigobj', $compiler->buildCompileCommand('generated.cc', 'generated.obj', $options));
+            $this->assertStringContainsString('/bigobj', $compiler->buildNativeCompileCommand('native.c', 'native.obj', $options, 'c'));
+        }
+        $this->assertStringNotContainsString('/bigobj', $compiler->buildLinkOptions());
+    }
+
     public function testMsvcDebugPdbOptionsApplyToCppAndCCommands(): void
     {
         $compiler = new Msvc(new Windows());
