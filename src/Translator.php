@@ -1558,6 +1558,7 @@ CODE;
 
         // request-level module state initialization
         $code .= 'static void module_init() {' . PHP_EOL;
+        $code .= $this->genCompiledGeneratorFingerprintRegistration();
         $code .= '// register constants' . PHP_EOL;
         foreach ($this->constants as $name => $const) {
             $code .= "{$name} = {$const->value};\n";

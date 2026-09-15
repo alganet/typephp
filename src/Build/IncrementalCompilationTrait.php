@@ -338,6 +338,19 @@ trait IncrementalCompilationTrait
             'debug' => $this->debug,
         ]));
 
+        // New self-hosted compiler builds embed their immutable source snapshot.
+        // Reading and hashing a 20+ MB executable on every tiny build costs more
+        // than processing the consumer source. Keep the executable fallback for
+        // binaries built before this metadata was introduced.
+        if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')
+            && defined('TYPEPHP_COMPILER_BUILD_FINGERPRINT')) {
+            $snapshot = constant('TYPEPHP_COMPILER_BUILD_FINGERPRINT');
+            if (is_string($snapshot) && preg_match('/^[a-f0-9]{64}$/D', $snapshot) === 1) {
+                hash_update($context, $snapshot);
+                return hash_final($context);
+            }
+        }
+
         // A compiled tpc executable is an immutable snapshot of the generator.
         // Walking and hashing every compiler PHP source on each consumer build
         // is both unnecessary and disproportionately expensive through the AOT
@@ -374,5 +387,37 @@ trait IncrementalCompilationTrait
             hash_update_file($context, $source);
         }
         return hash_final($context);
+    }
+
+    protected function genCompiledGeneratorFingerprintRegistration(): string
+    {
+        // Only the compiler executable owns this runtime constant; ordinary
+        // consumer binaries, libraries and extensions must not register it.
+        if (!$this->isBuildModeBin()
+            || !$this->incrementalPlanInitialized
+            || !$this->hasFunction(self::ENTRY_FUNCTION)
+            || !$this->hasClass('TypePhp\\Translator')
+            || realpath($this->getFunction(self::ENTRY_FUNCTION)->sourceFile)
+                !== realpath($this->rootPath . '/src/compiler.php')
+            || realpath($this->getClass('TypePhp\\Translator')->sourceFile)
+                !== realpath($this->rootPath . '/src/Translator.php')) {
+            return '';
+        }
+        // Do not include the running generator's fingerprint: that would make
+        // repeated self-hosted builds recursively fingerprint their predecessor.
+        $snapshot = hash('sha256', serialize([
+            'sources' => $this->incrementalSourceHashes,
+            'php' => $this->phpVersion,
+            'platform' => $this->targetPlatform,
+            'cxxStd' => $this->cxxStd,
+            'cxxFlags' => $this->cxxFlags,
+            'optimize' => $this->optimizeLevel,
+            'debug' => $this->debug,
+        ]));
+        // Embed mode activates this module after PHP startup has snapshotted
+        // persistent_constants_count. A late persistent constant would be freed
+        // as request memory by Zend shutdown. Publish the tiny value in RINIT.
+        return 'php::fn::define("TYPEPHP_COMPILER_BUILD_FINGERPRINT", php::Str("'
+            . $snapshot . '"));' . PHP_EOL;
     }
 }
