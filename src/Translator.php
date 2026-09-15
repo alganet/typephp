@@ -102,6 +102,17 @@ class Translator extends Preprocessor
     /** Generated per-file teardown functions for persistent AST class constants. */
     protected array $releaseAstConstantFns = [];
 
+    /** @var list<string> Cross-TU helpers called by module_init(). */
+    private array $classArrayConstantInitCalls = [];
+
+    /** @var list<string> Cross-TU helpers called by module_clean(). */
+    private array $classArrayConstantCleanCalls = [];
+
+    /** @var list<string> Forward declarations for split request-lifecycle helpers. */
+    private array $classArrayConstantLifecycleDeclarations = [];
+
+    private bool $classArrayConstantLifecycleSplit = false;
+
     // Windows resource file configuration (icon, version info, etc.)
     protected array $resourceConfig = [];
 
@@ -1184,6 +1195,12 @@ class Translator extends Preprocessor
         // whole-program property-default invariant local to the consumer too.
         $this->finalizeRequestArrayDefaultMetadata();
         $this->genClassCeList();
+        // Clean incremental metadata is restored in source-path order, while a
+        // full conversion discovers globals in dependency order. Definitions,
+        // request registration and cleanup have no ordering dependency, so use
+        // one canonical order and keep extension-*.cc byte-stable across both.
+        $extensionGlobalVars = $this->globalVars;
+        ksort($extensionGlobalVars, SORT_STRING);
         $this->indentLevel++;
 
         $code = $this->genExtensionIncludeHeaderFiles();
@@ -1217,7 +1234,7 @@ class Translator extends Preprocessor
         $code .= 'namespace ' . $projectNamespace . ' {' . PHP_EOL . PHP_EOL;
 
         $code .= "// global vars \n";
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($extensionGlobalVars as $name => $type) {
             $cppType = isset($this->nativeGlobalObjects[$name])
                 ? $this->getNativeObjectPointerType($this->nativeGlobalObjects[$name])
                 : Type::VAR;
@@ -1230,7 +1247,11 @@ class Translator extends Preprocessor
 
         $code .= "// class register functions \n";
         foreach ($this->classCeList as $ce) {
-            $code .= 'zend_class_entry *' . $ce . ';' . PHP_EOL;
+            // These slots are consumed only by the module-entry translation
+            // unit. Generated project sources resolve classes through the
+            // request/persistent cache accessors instead, so exposing one
+            // linkable data symbol per class is unnecessary.
+            $code .= 'static zend_class_entry *' . $ce . ' = nullptr;' . PHP_EOL;
         }
 
         $code .= "// request-local caches \n";
@@ -1403,6 +1424,12 @@ CODE;
         }
         $code .= $this->genRequestArrayDefaultInitializers();
 
+        if ($this->classArrayConstantLifecycleDeclarations !== []) {
+            $code .= "// split request-lifecycle helpers\n";
+            $code .= implode(PHP_EOL, $this->classArrayConstantLifecycleDeclarations)
+                . PHP_EOL . PHP_EOL;
+        }
+
         $traitMetadata = $this->genTraitMetadataCode();
         $code .= $traitMetadata['declarations'];
 
@@ -1537,7 +1564,7 @@ CODE;
             $code .= 'php::fn::define(' . $this->genCharPtr($const->name, true) . ', ' . $name . ');' . PHP_EOL;
         }
         $code .= '// global vars ' . PHP_EOL;
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($extensionGlobalVars as $name => $type) {
             if ($name == 'GLOBALS') {
                 continue;
             }
@@ -1591,7 +1618,7 @@ CODE;
 
         // request-level module state cleanup
         $code .= 'static void module_clean() {' . PHP_EOL;
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($extensionGlobalVars as $name => $type) {
             if ($name != 'GLOBALS') {
                 if (isset($this->nativeGlobalObjects[$name])) {
                     $code .= $this->escapeGlobalVar($name) . ' = nullptr;' . PHP_EOL;
@@ -1615,62 +1642,7 @@ CODE;
         $code .= $this->genPythonModuleCleanup();
 
         $code .= '// class array constants' . PHP_EOL;
-        foreach ($this->getClassLikesWithConstants() as $classDef) {
-            foreach ($classDef->constants as $constant) {
-                if ($constant->type === Type::ARRAY) {
-                    $constName = self::PREFIX . $this->getNativeName($constant->name, $classDef->namespace, $classDef->name);
-                    $code .= $constName . ".unset();\n";
-
-                    if (!$classDef instanceof ClassDef || !$classDef->nativeObject) {
-                        $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
-                        $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
-                    }
-                }
-            }
-        }
-
-        // Clean up inherited array constants from child classes
-        foreach ($this->symbols->classes() as $className => $classDef) {
-            if ($classDef->nativeObject) {
-                continue;
-            }
-            $ownConstNames = [];
-            foreach ($classDef->constants as $constant) {
-                if ($constant->type === Type::ARRAY) {
-                    $ownConstNames[$constant->name] = true;
-                }
-            }
-
-            $parentName = $this->escapeClass($classDef->extends);
-            while ($parentName && $this->symbols->hasClass($parentName)) {
-                $parentDef = $this->symbols->class($parentName);
-                foreach ($parentDef->constants as $constant) {
-                    if ($constant->type === Type::ARRAY && !isset($ownConstNames[$constant->name])) {
-                        $ownConstNames[$constant->name] = true;
-                        $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
-                        $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
-                    }
-                }
-                $parentName = $this->escapeClass($parentDef->extends);
-            }
-
-            foreach ($this->getClassImplementedInterfaces($classDef) as $interfaceName) {
-                if (!$this->hasInterface($interfaceName)) {
-                    continue;
-                }
-                $interfaceDef = $this->getInterface($interfaceName);
-                foreach ($interfaceDef->constants as $constant) {
-                    if ($constant->type === Type::ARRAY && !isset($ownConstNames[$constant->name])) {
-                        $ownConstNames[$constant->name] = true;
-                        $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
-                        $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
-                    }
-                }
-            }
-        }
+        $code .= $this->genClassArrayConstantCleanup();
 
         $code .= '}' . PHP_EOL . PHP_EOL;
         // module_clean end
@@ -3460,20 +3432,173 @@ CODE;
 
     protected function genClassArrayConstants(): string
     {
-        $code = '';
+        if ($this->classArrayConstantLifecycleSplit) {
+            return implode(PHP_EOL, $this->classArrayConstantInitCalls)
+                . ($this->classArrayConstantInitCalls === [] ? '' : PHP_EOL);
+        }
+
+        return implode('', array_column($this->getClassArrayConstantLifecycleOperations(), 'init'));
+    }
+
+    protected function genClassArrayConstantCleanup(): string
+    {
+        if ($this->classArrayConstantLifecycleSplit) {
+            return implode(PHP_EOL, $this->classArrayConstantCleanCalls)
+                . ($this->classArrayConstantCleanCalls === [] ? '' : PHP_EOL);
+        }
+
+        return implode('', array_column($this->getClassArrayConstantLifecycleOperations(), 'clean'));
+    }
+
+    /**
+     * Keep the arginfo-defined php_register_class_* functions in the extension
+     * translation unit, but isolate the much larger request-time array builders.
+     * Each constant gets its own non-inline function so GCC's points-to analysis
+     * cannot reconstruct the former multi-thousand-line module_init() under LTO.
+     *
+     * @return list<string>
+     */
+    public function genClassArrayConstantLifecycleSources(): array
+    {
+        $this->classArrayConstantInitCalls = [];
+        $this->classArrayConstantCleanCalls = [];
+        $this->classArrayConstantLifecycleDeclarations = [];
+        $this->classArrayConstantLifecycleSplit = true;
+
+        /** @var array<string, list<string>> $definitions */
+        $definitions = [];
+        /** @var array<string, array<string, true>> $dependencyFiles */
+        $dependencyFiles = [];
+        foreach ($this->getClassArrayConstantLifecycleOperations() as $operation) {
+            $sourceFile = $operation['sourceFile'];
+            if ($sourceFile === '' || !isset($this->declarationHeaderFiles[$sourceFile])) {
+                // Project class-likes normally always have an owner. Falling
+                // back to the extension keeps the generator correct for direct
+                // embedding APIs that construct symbols without source files.
+                $this->classArrayConstantInitCalls[] = $operation['init'];
+                $this->classArrayConstantCleanCalls[] = $operation['clean'];
+                continue;
+            }
+
+            $suffix = substr(hash('sha256', $sourceFile . "\0" . $operation['key']), 0, 20);
+            $initFunction = 'typephp_request_init_class_constant_' . $suffix;
+            $cleanFunction = 'typephp_request_clean_class_constant_' . $suffix;
+            $this->classArrayConstantLifecycleDeclarations[] =
+                "zend_never_inline void {$initFunction}();";
+            $this->classArrayConstantLifecycleDeclarations[] =
+                "zend_never_inline void {$cleanFunction}();";
+            $this->classArrayConstantInitCalls[] = "{$initFunction}();";
+            $this->classArrayConstantCleanCalls[] = "{$cleanFunction}();";
+            $definitions[$sourceFile][] = "zend_never_inline void {$initFunction}() {\n"
+                . $operation['init'] . "}\n\n";
+            $definitions[$sourceFile][] = "zend_never_inline void {$cleanFunction}() {\n"
+                . $operation['clean'] . "}\n\n";
+            foreach ($operation['dependencies'] as $dependencyFile) {
+                if ($dependencyFile !== '' && $dependencyFile !== $sourceFile) {
+                    $dependencyFiles[$sourceFile][$dependencyFile] = true;
+                }
+            }
+        }
+
+        $sources = [];
+        foreach ($definitions as $sourceFile => $sourceDefinitions) {
+            $headers = [
+                ...$this->getGeneratedSourceGlobalHeaders(),
+                $this->getRuntimeDeclarationHeaderName(),
+                ...$this->getDeclarationHeadersForFile($sourceFile),
+            ];
+            foreach (array_keys($dependencyFiles[$sourceFile] ?? []) as $dependencyFile) {
+                if (isset($this->declarationHeaderFiles[$dependencyFile])) {
+                    $headers[] = $this->declarationHeaderFiles[$dependencyFile];
+                }
+            }
+
+            $lifecycleSource = $this->getClassArrayConstantLifecycleSourceFile($sourceFile);
+            $code = $this->renderIncludeHeaderFiles($headers) . PHP_EOL;
+            $code .= 'namespace ' . $this->getProjectNamespace() . ' {' . PHP_EOL . PHP_EOL;
+            $code .= implode('', $sourceDefinitions);
+            $code .= '}  // namespace ' . $this->getProjectNamespace() . PHP_EOL;
+            $this->writeFile($lifecycleSource, $code);
+            $this->formatCppCode($lifecycleSource);
+            $this->registerGeneratedProjectSource($lifecycleSource);
+            $sources[] = $lifecycleSource;
+        }
+
+        $this->removeStaleClassArrayConstantLifecycleSources($sources);
+        return $sources;
+    }
+
+    private function getClassArrayConstantLifecycleSourceFile(string $sourceFile): string
+    {
+        $header = $this->declarationHeaderFiles[$sourceFile]
+            ?? basename($this->getDeclarationHeaderFile($sourceFile));
+        $stem = preg_replace('/_decl\\.h$/', '', basename($header)) ?: pathinfo($header, PATHINFO_FILENAME);
+        return $this->getBuildDir() . '/init/' . $stem . '_class_constants.cc';
+    }
+
+    /** @param list<string> $currentSources */
+    private function removeStaleClassArrayConstantLifecycleSources(array $currentSources): void
+    {
+        $manifest = $this->getBuildDir() . '/cache/incremental/' . $this->targetName
+            . '/class-constant-sources.json';
+        $previous = [];
+        if (is_file($manifest)) {
+            $decoded = json_decode((string) file_get_contents($manifest), true);
+            if (is_array($decoded)) {
+                $previous = array_values(array_filter($decoded, 'is_string'));
+            }
+        }
+        $current = array_map('basename', $currentSources);
+        foreach (array_diff($previous, $current) as $staleBasename) {
+            $staleSource = $this->getBuildDir() . '/init/' . basename($staleBasename);
+            $staleObject = $this->getObjectFile($staleSource);
+            foreach ([$staleSource, $staleObject, $this->getMiscObjectCacheMetadataFile($staleObject)] as $artifact) {
+                if (is_file($artifact)) {
+                    @unlink($artifact);
+                }
+            }
+        }
+        $this->writeFile(
+            $manifest,
+            json_encode($current, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
+                . PHP_EOL,
+        );
+    }
+
+    /**
+     * @return list<array{
+     *     sourceFile: string,
+     *     key: string,
+     *     dependencies: list<string>,
+     *     init: string,
+     *     clean: string
+     * }>
+     */
+    private function getClassArrayConstantLifecycleOperations(): array
+    {
+        $operations = [];
         foreach ($this->getClassLikesWithConstants() as $classDef) {
             foreach ($classDef->constants as $constant) {
                 if ($constant->type === Type::ARRAY) {
                     $constName = self::PREFIX . $this->getNativeName($constant->name, $classDef->namespace, $classDef->name);
-                    $code .= "do {\n";
-                    $code .= $constant->arrayExpr;
-                    $code .= $constName . ' = ' . $constant->value . ";\n";
+                    $init = "do {\n";
+                    $init .= $constant->arrayExpr;
+                    $init .= $constName . ' = ' . $constant->value . ";\n";
+                    $clean = $constName . ".unset();\n";
                     if (!$classDef instanceof ClassDef || !$classDef->nativeObject) {
                         $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
                         $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, {$constant->value});\n";
+                        $init .= "php::updateConstant($classNameStr, $classConstStr, {$constant->value});\n";
+                        $clean .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
                     }
-                    $code .= "} while(0);\n";
+                    $init .= "} while(0);\n";
+                    $operations[] = [
+                        'sourceFile' => $classDef->sourceFile,
+                        'key' => 'own:' . $classDef->getNamespacedName(false) . ':' . $constant->name,
+                        'dependencies' => [],
+                        'init' => $init,
+                        'clean' => $clean,
+                    ];
                 }
             }
         }
@@ -3499,7 +3624,14 @@ CODE;
                         $constName = self::PREFIX . $this->getNativeName($constant->name, $parentDef->namespace, $parentDef->name);
                         $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
                         $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, {$constName});\n";
+                        $operations[] = [
+                            'sourceFile' => $classDef->sourceFile,
+                            'key' => 'inherited:' . $classDef->getNamespacedName(false) . ':'
+                                . $constant->name . ':' . $parentDef->getNamespacedName(false),
+                            'dependencies' => [$parentDef->sourceFile],
+                            'init' => "php::updateConstant($classNameStr, $classConstStr, {$constName});\n",
+                            'clean' => "php::updateConstant($classNameStr, $classConstStr, php::null);\n",
+                        ];
                     }
                 }
                 $parentName = $this->escapeClass($parentDef->extends);
@@ -3516,13 +3648,20 @@ CODE;
                         $constName = self::PREFIX . $this->getNativeName($constant->name, $interfaceDef->namespace, $interfaceDef->name);
                         $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
                         $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, {$constName});\n";
+                        $operations[] = [
+                            'sourceFile' => $classDef->sourceFile,
+                            'key' => 'interface:' . $classDef->getNamespacedName(false) . ':'
+                                . $constant->name . ':' . $interfaceDef->getNamespacedName(false),
+                            'dependencies' => [$interfaceDef->sourceFile],
+                            'init' => "php::updateConstant($classNameStr, $classConstStr, {$constName});\n",
+                            'clean' => "php::updateConstant($classNameStr, $classConstStr, php::null);\n",
+                        ];
                     }
                 }
             }
         }
 
-        return $code;
+        return $operations;
     }
 
     protected function getAbsolutePath(string $path, string $projectDir): string

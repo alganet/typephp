@@ -428,6 +428,13 @@ trait SourcePipelineTrait
             // Function and data declarations are emitted together, one header
             // per PHP source, plus a small project-runtime ABI header.
             $this->genDeclarationHeaders($files);
+            // Large array-valued class constants used to make module_init() one
+            // enormous GCC optimization unit. Emit their request-lifecycle
+            // helpers as independent, cacheable translation units while the
+            // arginfo-backed class registration remains in extension-*.cc.
+            foreach ($this->genClassArrayConstantLifecycleSources() as $lifecycleSource) {
+                $sourceFiles[] = $lifecycleSource;
+            }
             // Nano keeps the ordinary statically registered Zend class/module
             // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
