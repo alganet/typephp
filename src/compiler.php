@@ -150,9 +150,9 @@ function resolveComposerAutoloader(): string
         if (!is_string($root) || $root === '') {
             continue;
         }
-        $candidate = rtrim($root, '/\\') . '/vendor/autoload.php';
-        if (!in_array($candidate, $candidates, true)) {
-            $candidates[] = $candidate;
+        $autoloadFile = rtrim($root, '/\\') . '/vendor/autoload.php';
+        if (!in_array($autoloadFile, $candidates, true)) {
+            $candidates[] = $autoloadFile;
         }
     }
 
