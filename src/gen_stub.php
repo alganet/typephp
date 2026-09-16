@@ -69,6 +69,14 @@ function reportFilePutContents(string $filename, string $content): void {
 function getClassConstFetchClassName(Expr\ClassConstFetch $expr): string
 {
     $className = $expr->class->toString();
+    if ($expr->class instanceof PhpParser\Node\Name && !$expr->class->isSpecialClassName()) {
+        // Trait members are copied into the using class after NameResolver has
+        // visited it. Their resolvedName still records the trait's own imports.
+        $resolvedName = $expr->class->getAttribute('resolvedName');
+        if ($resolvedName instanceof PhpParser\Node\Name) {
+            return '\\' . ltrim($resolvedName->toString(), '\\');
+        }
+    }
     if ($expr->class instanceof PhpParser\Node\Name\FullyQualified) {
         return '\\' . $className;
     }
