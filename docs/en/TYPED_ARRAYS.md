@@ -1,5 +1,7 @@
 # Typed PHP arrays and type annotations
 
+This document records current implementation boundaries. See [Unified Type Annotation Design](TYPE_ANNOTATIONS.md) for complete container contracts and target design, and [StdFunc / StdArgInfo](STD_FUNC_DESIGN.md) for proposed callback parameter rules (not implemented).
+
 `std::list(T)` and `std::dict(K, V)` retain PHP array storage and copy-on-write.
 Type annotations declare their key and value contracts on parameters and properties:
 

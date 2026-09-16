@@ -1,5 +1,7 @@
 # 强类型 PHP 数组与类型注解
 
+本文记录当前实现边界。完整的容器契约与目标设计见 [类型注解统一设计](TYPE_ANNOTATIONS.md)，作为回调参数的规则见 [StdFunc / StdArgInfo](STD_FUNC_DESIGN.md)（尚未实现）。
+
 `std::list(T)` / `std::dict(K, V)` 保留普通 PHP 数组存储与写时复制，使用类型注解声明参数或属性的键和值类型：
 
 ```php
