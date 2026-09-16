@@ -1,5 +1,6 @@
 <?php
 use StdVector as VectorOf;
+use StdArray as MatrixOf;
 
 class StdParameterUser
 {
@@ -10,6 +11,12 @@ function std_parameter_vector(#[VectorOf(Type::Int)] $vec): int
 {
     $vec[] = 42;
     return $vec[0];
+}
+
+function std_parameter_matrix(#[MatrixOf(Type::Int, [2, 3])] box $matrix): int
+{
+    $matrix[1][2] = 42;
+    return $matrix[1][2];
 }
 
 function std_parameter_map(#[StdMap(Type::String, Type::Float)] $map): float

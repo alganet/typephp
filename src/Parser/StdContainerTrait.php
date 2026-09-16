@@ -42,15 +42,19 @@ trait StdContainerTrait
 
     protected function parseStdParameterDefinition(Node\Param|Node\Stmt\Property $param): ?array
     {
+        $arrayAttribute = CompileTimeAttribute::find($param, 'StdArray');
+        if ($arrayAttribute !== null) {
+            $this->validateStdAttributeType($param, 'StdArray', 'box');
+            $this->validateStdContainerParameterShape($param, 'StdArray');
+            return $this->parseStdArrayAttributeDefinition($arrayAttribute);
+        }
         foreach (['StdVector' => 'vector', 'StdMap' => 'map', 'StdOrderedMap' => 'orderedMap'] as $name => $method) {
             $attribute = CompileTimeAttribute::find($param, $name);
             if ($attribute === null) {
                 continue;
             }
             $this->validateStdAttributeType($param, $name, 'box');
-            if ($param instanceof Node\Param && ($param->byRef || $param->variadic || $param->default !== null || $param->isPromoted())) {
-                $this->fatalError($param, $name . ' does not support reference, variadic, defaulted or promoted parameters');
-            }
+            $this->validateStdContainerParameterShape($param, $name);
             $expected = $method === 'vector' ? 1 : 2;
             if (count($attribute->args) !== $expected) {
                 $this->fatalError($attribute, $name . ' expects ' . $expected . ' type argument(s)');
@@ -87,6 +91,84 @@ trait StdContainerTrait
         return null;
     }
 
+    protected function validateStdContainerParameterShape(Node\Param|Node\Stmt\Property $owner, string $name): void
+    {
+        if ($owner instanceof Node\Param
+            && ($owner->byRef || $owner->variadic || $owner->default !== null || $owner->isPromoted())
+        ) {
+            $this->fatalError($owner, $name . ' does not support reference, variadic, defaulted or promoted parameters');
+        }
+    }
+
+    protected function parseStdArrayAttributeDefinition(Node\Attribute $attribute): array
+    {
+        if (count($attribute->args) !== 2) {
+            $this->fatalError($attribute, 'StdArray expects an element type and a size or dimensions array');
+        }
+        foreach ($attribute->args as $argument) {
+            if ($argument->name !== null || $argument->unpack || $argument->byRef) {
+                $this->fatalError($argument, 'StdArray requires positional type and dimension arguments');
+            }
+        }
+
+        $typeInfo = $this->parseStdValueTypeInfo($attribute->args[0]->value, 'StdArray');
+        if ($this->isNativeObjectClass($typeInfo['class'] ?? '')) {
+            $this->fatalError($attribute, 'StdArray parameters cannot hold Native objects across a Box boundary');
+        }
+        $dimensions = $this->parseStdArrayAttributeDimensions($attribute->args[1]->value);
+        $totalElements = 1;
+        foreach ($dimensions as $dimension) {
+            if ($dimension !== 0 && $totalElements > intdiv(PHP_INT_MAX, $dimension)) {
+                $this->fatalError($attribute, 'StdArray dimensions are too large');
+            }
+            $totalElements *= $dimension;
+        }
+        $bytesPerElement = $this->getStdValueTypeBytes($typeInfo['type']);
+        if ($totalElements !== 0 && $totalElements > intdiv(PHP_INT_MAX, $bytesPerElement)) {
+            $this->fatalError($attribute, 'StdArray dimensions exceed the supported storage size');
+        }
+
+        return [
+            'kind' => 'array',
+            'decl' => $this->getStdArrayDecl($typeInfo['type'], $dimensions, $typeInfo['class']),
+            'type' => $typeInfo['type'],
+            'class' => $typeInfo['class'],
+            // Existing std::array lowering stores sizes inner-to-outer. Keep
+            // that representation while exposing the canonical declaration
+            // order explicitly for caches, diagnostics, and future consumers.
+            'sizes' => array_reverse($dimensions),
+            'dimensions' => $dimensions,
+            'bytes' => $totalElements * $bytesPerElement,
+        ];
+    }
+
+    /** @return list<int> */
+    protected function parseStdArrayAttributeDimensions(NodeAbstract $expr): array
+    {
+        if ($this->isScalarInt($expr)) {
+            $dimensions = [$expr->value];
+        } elseif ($expr instanceof Expr\Array_) {
+            if ($expr->items === []) {
+                $this->fatalError($expr, 'StdArray dimensions cannot be empty');
+            }
+            $dimensions = [];
+            foreach ($expr->items as $item) {
+                if ($item === null || $item->key !== null || $item->unpack || !$this->isScalarInt($item->value)) {
+                    $this->fatalError($item ?? $expr, 'StdArray dimensions must be a positional array of integer literals');
+                }
+                $dimensions[] = $item->value->value;
+            }
+        } else {
+            $this->fatalError($expr, 'StdArray expects an integer size or a dimensions array');
+        }
+        foreach ($dimensions as $dimension) {
+            if ($dimension < 0) {
+                $this->fatalError($expr, 'StdArray dimensions cannot be negative');
+            }
+        }
+        return $dimensions;
+    }
+
     protected function initializeStdContainerParameters(FunctionDef $function): string
     {
         $code = '';
@@ -96,18 +178,29 @@ trait StdContainerTrait
             }
             $info = $this->addStdTypeId($argument->stdContainer);
             $info['parameter'] = true;
-            $this->context->stdContainers[$argument->name] = $info;
             $type = match ($info['kind']) {
+                'array' => Type::STD_ARRAY,
                 'vector' => Type::STD_VECTOR,
                 'map' => Type::STD_MAP,
                 'ordered_map' => Type::STD_ORDERED_MAP,
             };
+            if ($type === Type::STD_ARRAY) {
+                $this->context->stdArrays[$argument->name] = $info;
+            } else {
+                $this->context->stdContainers[$argument->name] = $info;
+            }
             $this->addLocalVar($argument->name, $type);
             $code .= 'if (UNEXPECTED(!' . $argument->name . '.isBox())) { php::throwStdContainerTypeMismatch(); }' . PHP_EOL;
             $code .= 'auto &' . $argument->name . '_ref = php::toStdContainer<' . $info['decl'] . '>('
                 . $argument->name . ', ' . $info['typeId'] . ');' . PHP_EOL;
         }
         return $code;
+    }
+
+    protected function isStdContainerParameter(string $name): bool
+    {
+        return !empty($this->context->stdContainers[$name]['parameter'])
+            || !empty($this->context->stdArrays[$name]['parameter']);
     }
 
     /**
@@ -333,6 +426,7 @@ trait StdContainerTrait
             'type' => $info['type'],
             'class' => $info['class'],
             'sizes' => array_reverse($nestedSizes),
+            'dimensions' => $nestedSizes,
             'bytes' => array_product($nestedSizes) * $this->getStdValueTypeBytes($info['type']),
         ];
     }
@@ -1005,6 +1099,7 @@ trait StdContainerTrait
             'type' => $type,
             'class' => $typeInfo['class'],
             'sizes' => array_reverse($nesting),
+            'dimensions' => $nesting,
             'bytes' => $totalBytes,
         ]);
         return '// ' . $decl;

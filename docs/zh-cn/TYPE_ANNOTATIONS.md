@@ -1,6 +1,6 @@
 # 类型注解统一设计
 
-状态：现有容器实现与目标设计的统一记录；`StdArray` 类型注解及 `StdFunc` / `StdArgInfo` 尚未实现。本文不代表新增功能已经可用。
+状态：现有容器实现与目标设计的统一记录；`StdArray` 类型注解已经实现，`StdFunc` / `StdArgInfo` 尚未实现。
 
 ## 术语与职责
 
@@ -17,7 +17,7 @@
 
 | 类型注解 | 创建值 | 存储与传递 | 核心契约 |
 |---|---|---|---|
-| `StdArray(T, sizeOrDimensions)`（拟议） | `std::array(T, N)` 或现有嵌套工厂 | PHPX Box，具体 C++ 定长模板实例 | 叶子类型、完整维度、禁止空洞 |
+| `StdArray(T, sizeOrDimensions)` | `std::array(T, N)` 或现有嵌套工厂 | PHPX Box，具体 C++ 定长模板实例 | 叶子类型、完整维度、禁止空洞 |
 | `StdVector(T)` | `std::vector(T[, size])` | PHPX Box，具体 C++ 模板实例 | 连续整数索引、元素类型 |
 | `StdMap(K, V)` | `std::map(K, V)` | PHPX Box，C++ 哈希映射 | 键和值类型 |
 | `StdOrderedMap(K, V)` | `std::orderedMap(K, V)` | PHPX Box，C++ 有序映射 | 键和值类型 |
@@ -25,7 +25,7 @@
 | `StdDict(K, V)` | `std::dict(K, V)` | 普通 PHP array，保留 COW | 键和值类型、必须显式提供键 |
 | `StdFunc(R, args)` | 已有函数或闭包值 | 拟议的带签名 callable | 参数、返回值、引用与缺省调用规则 |
 
-`std::array` 已实现，`StdArray` 类型注解是新纳入的目标接口，当前尚未注册或接入参数恢复，不能当作已可用功能。
+`std::array` 和 `StdArray` 类型注解均已实现。后者声明参数或属性契约，不创建容器值。
 
 不同存储模型不能因为类型参数相似就互换。Box 不等于 PHP array；类型注解也不改变 PHP 原生类型系统。
 
@@ -48,7 +48,7 @@ function append(#[StdList(Type::Int)] array &$items): void
 类型注解提供完整契约；PHP 类型可以省略，或者只声明兼容的存储类型：
 
 - `StdVector` / `StdMap` / `StdOrderedMap`：`box`。
-- 拟议 `StdArray`：省略 PHP 类型或声明为 `box`，不使用 PHP `array` 存储类型。
+- `StdArray`：省略 PHP 类型或声明为 `box`，不使用 PHP `array` 存储类型。
 - `StdList` / `StdDict`：`array`。
 - 拟议 `StdFunc`：`callable` 参数；回调本身可空时需要相容的 Nullable 声明，见专项设计。
 
@@ -70,7 +70,7 @@ function append(#[StdList(Type::Int)] array &$items): void
 
 **特殊性备注：StdArray 的类型注解方式与其他容器不同。** StdVector/StdList 只描述元素类型，StdMap/StdOrderedMap/StdDict 描述 key/value 类型；StdArray 必须同时描述叶子元素类型和固定形状，其第二个实参是长度或维度数组，不是 key 类型或另一个容器类型。只有 StdArray 支持结构性嵌套，因此不能直接复用其他容器的类型实参数量及解析规则；声明检查、类型匹配、缓存和 stub 均需保留维度信息。
 
-不使用递归 `new StdArray(new StdArray(...), ...)` 描述，也不允许以其他容器类型作为叶子类型。拟议声明为：
+不使用递归 `new StdArray(new StdArray(...), ...)` 描述，也不允许以其他容器类型作为叶子类型。声明为：
 
 ```php
 function process(#[StdArray(Type::Int, 100)] box $values): void {}
@@ -81,13 +81,13 @@ function matrix(#[StdArray(Type::Int, [100, 200, 8])] box $values): void {}
 
 - `StdArray(T, 100)` 与 `StdArray(T, [100])` 规范化为相同类型。
 - 保存叶子类型、解析后的类名及统一外到内的 `dimensions`；类型比较包含维度数量、顺序和每层长度，不比较元素总数来判断相等。
-- 维度必须是编译期可确定的整数，不能使用动态变量或函数调用，不能为负数，计算总元素数和字节数须检查溢出。零长度维度是否允许需与现有定长容器规则明确对齐后验收，不能在新注解路径上意外获得不同语义。
+- 维度必须是编译期整数字面量，不能使用动态变量、常量表达式或函数调用，不能为负数；零长度维度与 C++ `std::array<T, 0>` 一致。编译器检查总元素数和估算字节数溢出。
 - 只有 StdArray 支持结构性嵌套；多维类型降低为现有嵌套 C++ `StdArray`，不修改底层存储。现有创建值的嵌套 `std::array(...)` 工厂语法保持不变。
 - 每消费一层索引，剩余维度组成子数组类型，例如三维容器的 `$values[$i]` 为 `StdArray(T, [200, 8])`。
-- 简化声明语法不消除子数组所有权问题。建议首阶段普通子数组赋值及作为参数传递采用独立复制；共享借用、引用赋值和子数组裸指针传递仍需独立生命周期设计，不因维度数组语法自动开放。
+- 简化声明语法不消除子数组所有权问题。本次实现只恢复完整 StdArray 参数；共享借用、子数组参数、引用赋值和子数组裸指针传递仍需独立生命周期设计，不因维度数组语法自动开放。
 - 嵌套元素默认初始化必须递归保留完整形状。如果后续允许 Optional 的 StdArray，缺省值是该形状的默认初始化容器，不是普通 `[]`；创建、类元素初始化与生命周期仍需验证。
 
-StdArray 类型注解接入时还需在注册、Box 入口检查/恢复、属性元数据、子数组类型传导、缓存和 library stub 中保存完整维度。现有工厂支持嵌套，不代表这些参数/属性路径已实现。
+StdArray 参数入口校验 Box、容器种类、叶子类型和完整形状，然后恢复具体 C++ 引用；属性保存同一契约，但属性读取仍遵循下文的现有恢复边界。声明缓存和 library stub 保留维度。子数组作为独立参数的传导尚未开放。
 
 ## StdList / StdDict 的键和值
 

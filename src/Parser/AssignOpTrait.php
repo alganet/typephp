@@ -559,7 +559,7 @@ trait AssignOpTrait
                 if ($copyAssign !== null) {
                     return $copyAssign;
                 }
-                if (!empty($this->context->stdContainers[$var]['parameter'])) {
+                if ($this->isStdContainerParameter($var)) {
                     $this->fatalError($left, 'Std container parameter bindings cannot be replaced; modify the container contents instead');
                 }
             }

@@ -43,7 +43,7 @@ trait CompilationStateTrait
                 if (isset($this->context->typedArrays[$name])) {
                     $this->fatalError(new Variable($sourceName), 'Typed arrays cannot be captured by reference');
                 }
-                if (!empty($this->context->stdContainers[$name]['parameter'])) {
+                if ($this->isStdContainerParameter($name)) {
                     $this->fatalError(new Variable($sourceName), 'Std container parameters cannot be captured by reference');
                 }
                 $type = $this->getRawVarType($name);

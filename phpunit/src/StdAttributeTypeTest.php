@@ -29,16 +29,25 @@ final class StdAttributeTypeTest extends BaseTest
     {
         [$code, $compiler] = $this->translate(<<<'PHP'
 function vector_arg(#[StdVector(Type::Int)] box $v): void { $v[] = 1; }
+function array_arg(#[StdArray(Type::Int, [2, 3])] box $v): void { $v[1][2] = 1; }
+function array_arg_scalar(#[StdArray(Type::Int, 3)] box $v): void { $v[2] = 1; }
+function array_arg_vector(#[StdArray(Type::Int, [3])] box $v): void { $v[2] = 1; }
 function map_arg(#[StdMap(Type::Str, Type::Int)] box $v): void { $v['a'] = 2; }
 function ordered_arg(#[StdOrderedMap(Type::Int, Type::Str)] box $v): void { $v[0] = 'a'; }
 function list_arg(#[StdList(Type::Int)] array $v): void { $v[] = 3; }
 function dict_arg(#[StdDict(Type::Str, Type::Int)] array &$v): void { $v['a'] = 4; }
 PHP);
         self::assertStringContainsString('php_vector_arg(php::Var v)', $code);
+        self::assertStringContainsString('php_array_arg(php::Var v)', $code);
+        self::assertStringContainsString('php::StdArray<php::StdArray<php::Int, 3>, 2>', $code);
         self::assertStringContainsString('php_list_arg(php::Array v)', $code);
         self::assertStringContainsString('php_dict_arg(php::Array & v)', $code);
         $getFunction = new ReflectionMethod($compiler, 'getFunction');
         self::assertSame(Type::VAR, $getFunction->invoke($compiler, 'vector_arg')->argInfoList[0]->type);
+        self::assertSame(
+            $getFunction->invoke($compiler, 'array_arg_scalar')->argInfoList[0]->stdContainer,
+            $getFunction->invoke($compiler, 'array_arg_vector')->argInfoList[0]->stdContainer,
+        );
         self::assertSame(Type::ARRAY, $getFunction->invoke($compiler, 'list_arg')->argInfoList[0]->type);
         self::assertSame(Type::ARRAY_REF, $getFunction->invoke($compiler, 'dict_arg')->argInfoList[0]->type);
     }
@@ -53,6 +62,7 @@ class State {
     #[StdList(Type::Str)] public $inferred = [];
     #[StdDict(Type::Int, Type::Str)] public static array $labels = [];
     #[StdVector(Type::Int)] public box $vector;
+    #[StdArray(Type::Int, [2, 3])] public box $matrix;
     #[StdMap(Type::Str, Type::Int)] public box $map;
     #[StdOrderedMap(Type::Int, User::class)] public $ordered;
 }
@@ -76,6 +86,8 @@ PHP);
         self::assertSame('dict', $class->getProperty('users')->typedArray['kind']);
         self::assertSame('User', $class->getProperty('users')->typedArray['class']);
         self::assertSame('vector', $class->getProperty('vector')->stdContainer['kind']);
+        self::assertSame('array', $class->getProperty('matrix')->stdContainer['kind']);
+        self::assertSame([2, 3], $class->getProperty('matrix')->stdContainer['dimensions']);
         self::assertSame('ordered_map', $class->getProperty('ordered')->stdContainer['kind']);
         self::assertSame(Type::BOX, $class->getProperty('ordered')->type);
     }
@@ -93,7 +105,7 @@ PHP);
 
     public static function conflictingDeclarations(): iterable
     {
-        foreach (['StdVector(Type::Int)', 'StdMap(Type::Str, Type::Int)', 'StdOrderedMap(Type::Int, Type::Str)'] as $attribute) {
+        foreach (['StdArray(Type::Int, 3)', 'StdVector(Type::Int)', 'StdMap(Type::Str, Type::Int)', 'StdOrderedMap(Type::Int, Type::Str)'] as $attribute) {
             foreach (['array', 'mixed', 'any', '?box', 'box|int'] as $type) {
                 yield $attribute . ' parameter ' . $type => ["function f(#[{$attribute}] {$type} \$v): void {}", 'unless it is box'];
                 yield $attribute . ' property ' . $type => ["class A { #[{$attribute}] public {$type} \$v; }", 'unless it is box'];

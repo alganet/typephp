@@ -1,6 +1,6 @@
 # Std 容器参数类型注解
 
-`StdVector`、`StdMap`、`StdOrderedMap` 是 TypePHP 内置的类型注解。
+`StdArray`、`StdVector`、`StdMap`、`StdOrderedMap` 是 TypePHP 内置的 Box 容器类型注解。
 它们描述容器种类和元素类型，并自动完成以前需要手写的 `toStd*()` 类型恢复。
 
 本文记录现有 Box 容器参数实现。包含 `StdList` / `StdDict` 的统一规则见
@@ -10,6 +10,11 @@
 function append(#[StdVector(Type::Int)] $vec): void
 {
     $vec[] = 42;
+}
+
+function update_matrix(#[StdArray(Type::Int, [2, 3])] box $matrix): void
+{
+    $matrix[1][2] = 42;
 }
 
 function update(#[StdMap(Type::String, User::class)] $users): void
@@ -29,7 +34,7 @@ function visit(#[StdOrderedMap(Type::Int, Type::String)] $names): void
 
 - 一个参数只能有一个容器类型注解，不能重复或混用。
 - 类型注解提供完整契约，PHP 参数类型可以省略或声明为兼容的 `box`；不能声明 `mixed`、`any`、`array`、Nullable、联合类型或其他不兼容类型。
-- `StdVector` 接受一个类型实参；`StdMap`、`StdOrderedMap` 接受 key/value 两个类型实参。
+- `StdArray` 接受叶子类型及单长度或外到内维度数组；`StdVector` 接受一个类型实参；`StdMap`、`StdOrderedMap` 接受 key/value 两个类型实参。
 - 类型实参使用现有 std 工厂支持的 `Type::*` 或 `ClassName::class`；map 的 key 只支持 `Type::Int`、`Type::String`。
 - 使用位置为具名函数和方法参数，包括接口、抽象方法和 trait 方法；支持 Attribute 别名导入。
 - 首版不支持引用、可变、带默认值、构造器属性提升参数，以及 Closure、箭头函数和 Generator 参数。

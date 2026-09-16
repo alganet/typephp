@@ -1,6 +1,6 @@
 # StdFunc / StdArgInfo Type Annotation Design
 
-Status: an agreed design, not implemented. Names, flags, and syntax below describe the target interface, including the new StdArray annotation, not currently available features. See [unified type annotations](TYPE_ANNOTATIONS.md) for terminology and container contracts.
+Status: the `StdFunc` / `StdArgInfo` design is not implemented; the referenced StdArray annotation is implemented. See [unified type annotations](TYPE_ANNOTATIONS.md) for terminology and container contracts.
 
 ## Goals and non-goals
 

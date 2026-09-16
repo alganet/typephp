@@ -1,6 +1,6 @@
 # Unified Type Annotation Design
 
-Status: a combined record of existing container behavior and target design. The `StdArray` annotation, `StdFunc`, and `StdArgInfo` are not implemented. This document does not announce new available features.
+Status: a combined record of existing container behavior and target design. The `StdArray` annotation is implemented; `StdFunc` and `StdArgInfo` are not.
 
 ## Terminology and responsibilities
 
@@ -17,7 +17,7 @@ See [StdFunc and StdArgInfo](STD_FUNC_DESIGN.md), [typed PHP arrays](TYPED_ARRAY
 
 | Type annotation | Value factory | Storage and passing | Contract |
 |---|---|---|---|
-| Proposed `StdArray(T, sizeOrDimensions)` | `std::array(T, N)` or existing nested factories | PHPX Box containing fixed-size C++ template instances | Leaf type, full shape, no holes |
+| `StdArray(T, sizeOrDimensions)` | `std::array(T, N)` or existing nested factories | PHPX Box containing fixed-size C++ template instances | Leaf type, full shape, no holes |
 | `StdVector(T)` | `std::vector(T[, size])` | PHPX Box containing a C++ template instance | Contiguous integer indices and element type |
 | `StdMap(K, V)` | `std::map(K, V)` | PHPX Box containing a C++ hash map | Key and value types |
 | `StdOrderedMap(K, V)` | `std::orderedMap(K, V)` | PHPX Box containing a C++ ordered map | Key and value types |
@@ -25,7 +25,7 @@ See [StdFunc and StdArgInfo](STD_FUNC_DESIGN.md), [typed PHP arrays](TYPED_ARRAY
 | `StdDict(K, V)` | `std::dict(K, V)` | Ordinary PHP array with COW | Key and value types, explicit keys required |
 | `StdFunc(R, args)` | Existing function or closure value | Proposed signature-bearing callable | Parameters, result, references, and omission rules |
 
-The `std::array` container exists. Its `StdArray` annotation is a newly included target interface, not yet registered or integrated with parameter recovery, and must not be treated as available behavior.
+Both the `std::array` container and its `StdArray` annotation are implemented. The annotation declares parameter/property contracts; it does not create values.
 
 Similar type arguments do not make storage models interchangeable. A Box is not a PHP array, and annotations do not change PHP's native type system.
 
@@ -48,7 +48,7 @@ function append(#[StdList(Type::Int)] array &$items): void
 An annotation supplies the full contract. The PHP type may be omitted or name compatible storage:
 
 - `box` for `StdVector`, `StdMap`, and `StdOrderedMap`.
-- An omitted PHP type or `box` for proposed `StdArray`, not PHP `array` storage.
+- An omitted PHP type or `box` for `StdArray`, not PHP `array` storage.
 - `array` for `StdList` and `StdDict`.
 - A `callable` parameter for proposed `StdFunc`; nullable callback bindings require compatible nullable declarations, as specified in its design.
 
@@ -70,7 +70,7 @@ A declaration has one primary type annotation; duplicates and conflicting contai
 
 **Special case: StdArray uses a different annotation form from other containers.** StdVector/StdList describe an element type, and StdMap/StdOrderedMap/StdDict describe key/value types. StdArray must describe both its leaf element type and fixed shape; the second argument is a length or dimension array, not a key type or another container type. Only StdArray supports structural nesting, so other containers' type-argument counts and parsing rules cannot be reused unchanged. Declaration checks, matching, caches, and stubs must retain dimensions.
 
-Do not use recursive `new StdArray(new StdArray(...), ...)` descriptors or other container types as structural leaf types. Proposed declarations are:
+Do not use recursive `new StdArray(new StdArray(...), ...)` descriptors or other container types as structural leaf types. Declarations are:
 
 ```php
 function process(#[StdArray(Type::Int, 100)] box $values): void {}
@@ -81,13 +81,13 @@ The second argument is one length or a nonempty dimension array, ordered outermo
 
 - `StdArray(T, 100)` and `StdArray(T, [100])` normalize to the same type.
 - Retain the leaf type, resolved class, and outer-to-inner `dimensions`. Equality includes rank, order, and each length, not merely total element count.
-- Dimensions are compile-time integer values, never dynamic variables or function calls. Negative dimensions are invalid; total element/byte calculations check overflow. Whether zero-length dimensions are permitted must explicitly align with fixed-container rules and be tested, rather than accidentally introduce different semantics in the annotation path.
+- Dimensions are integer literals, never dynamic variables, constant expressions, or function calls. Negative dimensions are invalid; zero-length dimensions follow C++ `std::array<T, 0>`. Total element and estimated-byte calculations check overflow.
 - Only StdArray supports structural nesting. Multidimensional contracts lower to existing nested C++ `StdArray` storage. Existing nested `std::array(...)` value-factory syntax stays unchanged.
 - Each index consumes one dimension. For example, `$values[$i]` from this three-dimensional container has type `StdArray(T, [200, 8])`.
-- Simpler syntax does not solve subarray ownership. Initially prefer independent copies for ordinary subarray assignment and parameter passing. Shared borrowing, reference assignment, and raw subarray pointers require separate lifetime design and are not automatically enabled.
+- Simpler syntax does not solve subarray ownership. This implementation restores complete StdArray parameters only. Shared borrowing, subarray parameters, reference assignment, and raw subarray pointers require separate lifetime design and are not automatically enabled.
 - Default initialization recursively preserves the full shape. If Optional StdArray parameters are later enabled, their empty value is a correctly shaped default-initialized container, not ordinary `[]`; allocation, class-element initialization, and lifetime still need validation.
 
-Annotation registration, Box entry checks/recovery, property metadata, subarray propagation, caches, and library stubs must retain the full shape. Existing nested factory support does not implement these parameter/property paths.
+Parameter entry validates the Box, container kind, leaf type, and full shape before recovering the concrete C++ reference. Properties retain the same contract but still follow the existing property-read recovery boundary below. Declaration caches and library stubs retain dimensions. Independent subarray-parameter propagation is not enabled.
 
 ## StdList / StdDict keys and values
 

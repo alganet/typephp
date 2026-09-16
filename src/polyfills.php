@@ -116,6 +116,12 @@ final readonly class Constructor
 }
 
 #[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
+final readonly class StdArray
+{
+    public function __construct(string $valueType, int|array $sizeOrDimensions) {}
+}
+
+#[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
 final readonly class StdVector
 {
     public function __construct(string $valueType) {}

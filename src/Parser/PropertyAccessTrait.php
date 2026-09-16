@@ -1079,7 +1079,7 @@ trait PropertyAccessTrait
                 $this->fatalError($var, 'Attempt to unset static property ' . $this->parseIdentifier($var->class) . '::$' . $this->parseIdentifier($var->name));
             } elseif ($this->isVarExpr($var)) {
                 $name = $this->parseIdentifier($var);
-                if (!empty($this->context->stdContainers[$name]['parameter'])) {
+                if ($this->isStdContainerParameter($name)) {
                     $this->fatalError($var, 'Std container parameter bindings cannot be unset');
                 }
                 if (!$this->hasVar($name)) {
