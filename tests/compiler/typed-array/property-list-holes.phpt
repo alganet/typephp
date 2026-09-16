@@ -1,34 +1,34 @@
 --TEST--
-ArrayDef list indexed writes use PHP's append position after unset
+TypedProperty lists allow sparse and negative integer keys after unset
 --FILE--
 <?php
 
-class ArrayDefListWithHoles
+class TypedPropertyListWithHoles
 {
-    #[ArrayDef(Type::String)]
+    #[StdList(Type::String)]
     public array $values = [];
 }
 
 #[Native]
-class NativeArrayDefListWithHoles
+class NativeTypedPropertyListWithHoles
 {
-    #[ArrayDef(Type::Int)]
+    #[StdList(Type::Int)]
     public array $values = [];
 }
 
-function writeListValue(ArrayDefListWithHoles $box, int $index, string $value): void
+function writeListValue(TypedPropertyListWithHoles $box, int $index, string $value): void
 {
     $box->values[$index] = $value;
 }
 
-function writeNativeListValue(NativeArrayDefListWithHoles $box, int $index, int $value): void
+function writeNativeListValue(NativeTypedPropertyListWithHoles $box, int $index, int $value): void
 {
     $box->values[$index] = $value;
 }
 
 function main(): void
 {
-    $box = new ArrayDefListWithHoles();
+    $box = new TypedPropertyListWithHoles();
     writeListValue($box, 0, 'zero');
     $box->values[] = 'one';
     $box->values[] = 'two';
@@ -42,13 +42,11 @@ function main(): void
 
     var_dump($box->values);
 
-    try {
-        writeListValue($box, 6, 'gap');
-    } catch (Error $error) {
-        echo "list gap rejected\n";
-    }
+    writeListValue($box, 6, 'gap');
+    writeListValue($box, -2, 'negative');
+    var_dump($box->values[6], $box->values[-2]);
 
-    $native = new NativeArrayDefListWithHoles();
+    $native = new NativeTypedPropertyListWithHoles();
     $native->values[] = 10;
     $native->values[] = 20;
     unset($native->values[1]);
@@ -69,7 +67,8 @@ array(4) {
   [1]=>
   string(9) "one-again"
 }
-list gap rejected
+string(3) "gap"
+string(8) "negative"
 array(2) {
   [0]=>
   int(10)

@@ -15,7 +15,7 @@ This directory contains compiler implementation, compatibility, build-mode, and 
 - [Three Object Storage and Passing Models](OBJECT_STORAGE_AND_PASSING_MODELS.md): the responsibilities, ABI, and non-substitutable boundaries of Zend Object, PHPX Box, and Native Class Object.
 - [Universal and Extension Methods](UNIVERSAL_METHODS.md), [Generator](YIELD_GENERATOR.md).
 - [`#[Immutable]` compile-time read-only contract](IMMUTABLE.md): methods, parameters, aliases, call boundaries, and dynamic escape rules.
-- [`#[ArrayDef]` array property contract](ARRAY_DEF.md): List/Map metadata, direct-write checks, and dynamic escape boundaries.
+- [Typed PHP arrays and type annotations](TYPED_ARRAYS.md): List/Map metadata, direct-write checks, and dynamic escape boundaries.
 - [Class Inheritance](CLASS_INHERITANCE.md), [Mixed C++/PHP](MIXED_CPP_PHP.md).
 
 ## Architecture and maintenance

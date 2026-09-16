@@ -1427,7 +1427,7 @@ trait FuncCallOptimizer
                 // A function whose ABI contains Native pointers is callable
                 // only from generated TypePHP C++. It has no Zend wrapper and
                 // therefore must remain invisible to function_exists().
-                return $this->functionUsesNativeObject($this->getFunction($nativeFunction))
+                return $this->functionRequiresNativeAbi($this->getFunction($nativeFunction))
                     ? 'false'
                     : 'true';
             }

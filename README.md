@@ -93,7 +93,7 @@ This two-phase design keeps multi-file and self-hosted builds deterministic.
 - **Compile-time functions & keywords** — `std::any()`, `std::object()`,
   `std::ref()`, `std::expected()`, `std::unexpected()`, plus `toObject()`,
   `toInt()`, `toString()`, `toArray()` and friends.
-- **Compile-time safety** — `#[Immutable]` read-only contracts and `#[ArrayDef]`
+- **Compile-time safety** — `#[Immutable]` read-only contracts and `StdList` / `StdDict`
   array-shape metadata, checked at compile time with zero runtime cost.
 - **Compile-time code generation** — `#[Getter]`, `#[Setter]`, `#[With]`,
   `#[Constructor]`, `#[Printer]`, and `#[Arrayable]` generate type-safe methods
@@ -795,7 +795,7 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 - [Compile-time functions](docs/en/COMPILE_TIME_FUNCTIONS.md) — `std::any()`, `std::ref()`, `std::expected()`, …
 - [Mixed C++/PHP](docs/en/MIXED_CPP_PHP.md) — C++/PHP interop
 - [`#[Immutable]`](docs/en/IMMUTABLE.md) — compile-time read-only contracts
-- [`#[ArrayDef]`](docs/en/ARRAY_DEF.md) — typed array-property contracts
+- [Typed PHP arrays and type annotations](docs/en/TYPED_ARRAYS.md) — typed array-property contracts
 - [Property hooks](docs/en/PROPERTY_HOOKS.md) — PHP 8.4 hook lowering and runtime metadata
 - [Object storage models](docs/en/OBJECT_STORAGE_AND_PASSING_MODELS.md) — Zend object, Box, and Native class boundaries
 - [Generators](docs/en/YIELD_GENERATOR.md) — generator lowering and lifecycle

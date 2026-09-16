@@ -1357,7 +1357,6 @@ class Preprocessor extends CompilerBase
                 // not to the property default table. The property itself must stay
                 // uninitialized until __construct assigns it.
                 $promotedProperty = $this->addClassProperty($phpName, $param->flags, $param->type, null, $nullable, $param, true);
-                $promotedProperty->arrayDef = $this->parseArrayDefinition($param);
             }
             if ($param->variadic) {
                 if ($i !== $last) {
@@ -1377,11 +1376,22 @@ class Preprocessor extends CompilerBase
             }
             $argInfo = new ArgInfo();
             $argInfo->stdContainer = $this->parseStdParameterDefinition($param);
+            $argInfo->typedArray = $this->parseTypedArrayParameterDefinition($param);
+            if ($argInfo->typedArray !== null && $functionDef->generator) {
+                $this->fatalError($param, 'Typed array parameters are not supported on generators');
+            }
             if ($argInfo->stdContainer !== null && $functionDef->generator) {
                 $this->fatalError($param, 'Std container parameter attributes are not supported on generators');
             }
             $type = $this->parseParameterType($param, $argInfo, $name);
+            if ($argInfo->typedArray !== null) {
+                $type = $param->byRef ? Type::ARRAY_REF : Type::ARRAY;
+                $argInfo->undeclared = false;
+            }
             if ($argInfo->stdContainer !== null) {
+                // box is the public storage declaration. Containers still use
+                // the existing php::Var resource ABI, not a raw php::Box.
+                $type = Type::VAR;
                 $argInfo->undeclared = false;
             }
             $argInfo->name = $name;
@@ -1392,7 +1402,7 @@ class Preprocessor extends CompilerBase
             $argInfo->property = $param->isPromoted();
             $argInfo->immutable = \TypePhp\Transform\CompileTimeAttribute::consume($param, 'Immutable');
             if ($param->type === null || $param->type instanceof NullableType) {
-                $argInfo->nullable = $argInfo->stdContainer === null;
+                $argInfo->nullable = $argInfo->stdContainer === null && $argInfo->typedArray === null;
             }
             if (($param->byRef && $param->type !== null && !Type::isTypedRefType($type))
                 || $param->type instanceof NullableType
@@ -2747,9 +2757,10 @@ class Preprocessor extends CompilerBase
     protected function parseClassPropertyDef(Node\Stmt\Property $v): void
     {
         $this->validateClassPropertyHookPlacement($v);
-        $arrayDef = $this->parseArrayDefinition($v);
+        $typedArray = $this->parseTypedArrayPropertyDefinition($v);
+        $stdContainer = $this->parseStdParameterDefinition($v);
         if ($this->classDef->nativeObject) {
-            if ($v->type === null) {
+            if ($v->type === null && $typedArray === null && $stdContainer === null) {
                 $this->fatalError($v, 'Native class properties must declare a type');
             }
             if ($v->isStatic()) {
@@ -2771,8 +2782,13 @@ class Preprocessor extends CompilerBase
 
         foreach ($v->props as $prop) {
             $propName = $this->parseIdentifier($prop->name);
-            $propDef = $this->addClassProperty($propName, $v->flags, $v->type, $prop->default, $nullable, $v);
-            $propDef->arrayDef = $arrayDef;
+            $propertyType = $v->type ?? ($typedArray !== null ? new Node\Identifier('array') : null);
+            if ($propertyType === null && $stdContainer !== null) {
+                $propertyType = new Node\Name('box');
+            }
+            $propDef = $this->addClassProperty($propName, $v->flags, $propertyType, $prop->default, $nullable, $v);
+            $propDef->typedArray = $typedArray;
+            $propDef->stdContainer = $stdContainer;
             if ($this->classDef->nativeObject && $this->isNativeObjectForbiddenPropertyType($propDef)) {
                 $message = $propDef->type === Type::BOX
                     ? 'Native class properties cannot use Box types'

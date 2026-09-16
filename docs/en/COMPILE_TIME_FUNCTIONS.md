@@ -41,7 +41,7 @@ Constraints:
 
 ## `std::` compile-time entry points
 
-There are currently 15 `std::` compile-time entry points.
+There are currently 17 `std::` compile-time entry points.
 
 | Name | Purpose | Main limitation |
 | --- | --- | --- |
@@ -60,6 +60,10 @@ There are currently 15 `std::` compile-time entry points.
 | `std::vector($type[, $size])` | Constructs a std vector. | Can only be used in the top-level scope of the variable's first assignment. |
 | `std::map($keyType, $valueType)` | Constructs a std map. | Can only be used in the top-level scope of the variable's first assignment. |
 | `std::orderedMap($keyType, $valueType)` | Constructs a std ordered map. | Can only be used in the top-level scope of the variable's first assignment. |
+| `std::list($valueType)` | Creates an integer-key typed PHP array with negative/sparse indices and append. | First assignment of a new function-local variable; strict dynamic keys, no dynamic reference mutation. |
+| `std::dict($keyType, $valueType)` | Creates a typed PHP dictionary with `Type::Int` or `Type::Str` keys. | First assignment of a new function-local variable; explicit keys required, no append. |
+
+Lists and dicts retain PHP array storage and copy-on-write without `toStd*()` recovery. Values require matching static types, while dynamic `any` / `var` keys receive internal strict checks. Only read-only dynamic PHP array calls are allowed, without `std::ref()`. Parameters need exactly matching `StdList` / `StdDict` type annotations, with the PHP type omitted or declared as `array`, never `mixed`; matching native `&` parameters can modify the caller's array. See [Typed PHP Arrays and Type Annotations](TYPED_ARRAYS.md) for examples and boundary details.
 
 ## Std container conversion keyword methods
 

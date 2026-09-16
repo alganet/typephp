@@ -601,6 +601,10 @@ trait UniversalMethodCall
      */
     protected function parseUniversalMethodCall(Node\Expr\MethodCall $expr, string $receiver, string $method, array $def, bool $isVar = true): ?string
     {
+        if ($this->getTypedArrayDefinition($expr->var) !== null
+            && in_array($def['handler'], ['php_fn_ref', 'direct_method_mutate', 'provider_extension'], true)) {
+            $this->fatalError($expr, 'Typed arrays cannot use untyped mutating or extension methods');
+        }
         if ($def['handler'] === 'php_fn') {
             $function = strtolower($def['fn']);
             $this->compilationStatistics->record(CompilationStatistics::FUNCTIONS, $function);
@@ -637,6 +641,23 @@ trait UniversalMethodCall
             }
         }
         $this->validateUniversalMethodArgs($expr, $method, $def, $isVar);
+
+        if ($this->getTypedArrayDefinition($expr->var) !== null && in_array($method, ['keyExists', 'get'], true)) {
+            $argument = $expr->args[0];
+            if ($argument->unpack || $argument->name !== null || $argument->byRef) {
+                $this->fatalError($argument, 'Typed array lookup methods require a positional key');
+            }
+            $key = $this->guardTypedArrayValue($this->getTypedArrayDefinition($expr->var), $argument->value,
+                $this->parseExprAsValue($argument->value), true);
+            return $receiver . ($method === 'keyExists' ? '.exists(' : '.get(') . $key . ')';
+        }
+        if (in_array($def['handler'], ['php_fn', 'php_fn_ref'], true)) {
+            $position = $def['receiver_pos'] ?? 0;
+            foreach ($expr->args as $index => $argument) {
+                $parameterIndex = $position === 0 || $index >= $position - 1 ? $index + 1 : $index;
+                $this->validateTypedArrayDynamicArgument($argument, $def['fn'], '', $parameterIndex);
+            }
+        }
 
         return match ($def['handler']) {
             'calc_op'              => $this->genUniversalCalcOp($receiver, $def['op'], $expr->args),

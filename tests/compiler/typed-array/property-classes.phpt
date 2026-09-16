@@ -1,5 +1,5 @@
 --TEST--
-ArrayDef supports class value types, subclasses, aliases and dynamic checks
+TypedProperty supports class value types, subclasses, aliases and statically typed writes
 --FILE--
 <?php
 
@@ -18,19 +18,19 @@ namespace Demo {
 
     class UserCollection
     {
-        #[\ArrayDef(Member::class)]
+        #[\StdList(Member::class)]
         public array $list = [];
 
-        #[\ArrayDef(\Type::String, \App\User::class)]
+        #[\StdDict(\Type::String, \App\User::class)]
         public array $map = [];
     }
 
-    function putList(UserCollection $collection, any $value): void
+    function putList(UserCollection $collection, \App\User $value): void
     {
         $collection->list[] = $value;
     }
 
-    function putMap(UserCollection $collection, any $key, any $value): void
+    function putMap(UserCollection $collection, any $key, \App\User $value): void
     {
         $collection->map[$key] = $value;
     }
@@ -53,16 +53,6 @@ namespace {
             echo $key, '=', $user->name, "\n";
         }
 
-        try {
-            Demo\putList($collection, new App\Other());
-        } catch (TypeError $error) {
-            echo "list class checked\n";
-        }
-        try {
-            Demo\putMap($collection, 'bad', new stdClass());
-        } catch (TypeError $error) {
-            echo "map class checked\n";
-        }
     }
 }
 ?>
@@ -72,5 +62,3 @@ admin
 dynamic-list
 owner=owner
 dynamic=dynamic-map
-list class checked
-map class checked

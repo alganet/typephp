@@ -1,0 +1,24 @@
+# 强类型 PHP 数组与类型注解
+
+`std::list(T)` / `std::dict(K, V)` 保留普通 PHP 数组存储与写时复制，使用类型注解声明参数或属性的键和值类型：
+
+```php
+class State
+{
+    #[StdList(Type::Int)] public array $values = [];
+    #[StdDict(Type::Str, Type::Int)] public $counts = [];
+}
+
+function append(#[StdList(Type::Int)] array &$values): void
+{
+    $values[] = 42;
+}
+```
+
+PHP 类型可以省略或声明为兼容类型：`StdList` / `StdDict` 对应 `array`，`StdVector` / `StdMap` / `StdOrderedMap` 对应 `box`。不允许显式 `mixed`、`any`、可空类型、联合类型和其他不兼容类型。
+
+list 支持负数、稀疏整数键和空洞，不做边界检查；只有 list 允许 `[]` 追加。dict 必须显式提供 int 或 str 键。动态 `any` / `var` 键插入内部严格检查，不做隐式转换。值要求静态类型匹配，`Type::Any` 值除外。
+
+局部强类型数组禁止通过 `std::ref()`、元素引用、可修改或引用传递的数组函数逃逸到动态 PHP。类型一致的原生参数可以按引用传递。字符串键 dict 遍历时将 PHP 数字键恢复为字符串，不修改 phpx 或底层 HashTable。
+
+当前属性类型注解检查第一层直接元素赋值，并不完整保护整属性替换、动态 PHP 对象修改或对象/属性引用逃逸。属性读取不会自动升级为受封闭契约保护的局部强类型数组。

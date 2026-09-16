@@ -170,6 +170,8 @@ trait CallArgumentGenerator
             // expressions/temporaries may then be rearranged safely for the native
             // C++ ABI without changing observable call order.
             foreach ($sourceArgs as $sourceIndex => [$sourceArgIndex, $variadicName, $arg]) {
+                $typedParameter = $this->getArgInfoByIndex($functionDef, $sourceArgIndex);
+                $this->assertTypedArrayArgument($arg, $typedParameter, $typedParameter?->byRef ?? false, !$functionDef->stub);
                 if ($sourceIndex < $lastHoistingSourceIndex
                     && $arg instanceof Node\Arg
                     && !$arg->unpack
@@ -472,6 +474,7 @@ trait CallArgumentGenerator
                 if ($this->isPlaceholderExpr($arg)) {
                     throw new PlaceHolder();
                 }
+                $this->validateTypedArrayDynamicArgument($arg, $funcName, $className, $i);
                 if ($arg->unpack) {
                     if ($hasNamedArg) {
                         $this->fatalError($arg, 'Cannot use argument unpacking after named arguments');
@@ -881,6 +884,7 @@ trait CallArgumentGenerator
             if (count($expr->args) !== 1) {
                 $this->fatalError($errorNode, 'The std::ref function only accepts one parameter');
             }
+            $this->assertTypedArrayReferenceForbidden($expr->args[0]->value);
             return $expr->args[0]->value;
         }
 
@@ -888,6 +892,7 @@ trait CallArgumentGenerator
             if (!empty($expr->args)) {
                 $this->fatalError($errorNode, 'The toRef method does not accept parameters');
             }
+            $this->assertTypedArrayReferenceForbidden($expr->var);
             return $expr->var;
         }
 

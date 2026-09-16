@@ -1,61 +1,61 @@
 --TEST--
-ArrayDef enforces direct list and map writes for Zend and Native classes
+TypedProperty enforces direct list and map writes for Zend and Native classes
 --FILE--
 <?php
 
-class ZendArrayDefBox
+class ZendTypedPropertyBox
 {
-    #[ArrayDef(Type::String)]
+    #[StdList(Type::String)]
     public array $names = [];
 
-    #[ArrayDef(Type::Int, Type::String)]
+    #[StdDict(Type::Int, Type::String)]
     public array $labels = [];
 
-    #[ArrayDef(Type::String, Type::Int)]
+    #[StdDict(Type::String, Type::Int)]
     public static array $staticCounters = [];
 }
 
-class PromotedArrayDefBox
+class PromotedTypedPropertyBox
 {
     public function __construct(
-        #[ArrayDef(Type::Int)] public array $values = [],
+        public array $values = [],
     ) {
     }
 }
 
 #[Native]
-class NativeArrayDefBox
+class NativeTypedPropertyBox
 {
-    #[ArrayDef(Type::Int)]
+    #[StdList(Type::Int)]
     public array $values = [];
 
-    #[ArrayDef(Type::String, Type::Int)]
+    #[StdDict(Type::String, Type::Int)]
     public array $counters = [];
 }
 
-function writeDynamicList(ZendArrayDefBox $box, any $key, any $value): void
+function writeDynamicList(ZendTypedPropertyBox $box, any $key, string $value): void
 {
     $box->names[$key] = $value;
 }
 
-function writeDynamicMap(NativeArrayDefBox $box, any $key, any $value): void
+function writeDynamicMap(NativeTypedPropertyBox $box, any $key, int $value): void
 {
     $box->counters[$key] = $value;
 }
 
 function main(): void
 {
-    $zend = new ZendArrayDefBox();
+    $zend = new ZendTypedPropertyBox();
     $zend->names[] = 'first';
     $zend->names[count($zend->names)] = 'second';
     $zend->names[0] = 'changed';
     $zend->labels[10] = 'ten';
-    ZendArrayDefBox::$staticCounters['writes'] = 1;
+    ZendTypedPropertyBox::$staticCounters['writes'] = 1;
 
-    $promoted = new PromotedArrayDefBox();
+    $promoted = new PromotedTypedPropertyBox();
     $promoted->values[] = 13;
 
-    $native = new NativeArrayDefBox();
+    $native = new NativeTypedPropertyBox();
     $native->values[] = 7;
     $native->values[count($native->values)] = 8;
     $native->values[1] = 9;
@@ -65,7 +65,7 @@ function main(): void
     writeDynamicList($zend, count($zend->names), 'appended');
     writeDynamicMap($native, 'dynamic', 12);
 
-    var_dump($zend->names, $zend->labels, ZendArrayDefBox::$staticCounters, $promoted->values, $native->values, $native->counters);
+    var_dump($zend->names, $zend->labels, ZendTypedPropertyBox::$staticCounters, $promoted->values, $native->values, $native->counters);
 
     try {
         writeDynamicList($zend, '1', 'bad-key');
@@ -73,25 +73,12 @@ function main(): void
         echo "list key type checked\n";
     }
     try {
-        writeDynamicList($zend, 0, 123);
-    } catch (TypeError $error) {
-        echo "list value type checked\n";
-    }
-    try {
         writeDynamicMap($native, 1, 12);
     } catch (TypeError $error) {
         echo "map key type checked\n";
     }
-    try {
-        writeDynamicMap($native, 'bad', '12');
-    } catch (TypeError $error) {
-        echo "map value type checked\n";
-    }
-    try {
-        writeDynamicList($zend, count($zend->names) + 1, 'out');
-    } catch (Error $error) {
-        echo "list bounds checked\n";
-    }
+    writeDynamicList($zend, count($zend->names) + 1, 'out');
+    var_dump($zend->names[4]);
 }
 ?>
 --EXPECT--
@@ -128,7 +115,5 @@ array(2) {
   int(12)
 }
 list key type checked
-list value type checked
 map key type checked
-map value type checked
-list bounds checked
+string(3) "out"

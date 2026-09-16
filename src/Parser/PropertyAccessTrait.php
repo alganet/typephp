@@ -1019,6 +1019,8 @@ trait PropertyAccessTrait
                         'offsetUnset',
                         [new Node\Arg($var->dim)],
                     ) . ';';
+                } elseif ($this->getTypedArrayAccessDefinition($var) !== null) {
+                    $lines[] = $this->parseTypedArrayUnset($var) . ';';
                 } elseif ($this->isStdContainerExpr($var)) {
                     $lines[] = $this->parseStdContainerOffsetUnset($var) . ';';
                 } else {

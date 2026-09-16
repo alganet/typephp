@@ -20,7 +20,7 @@ final class CompileTimeAttribute
             return;
         }
         foreach ($node->getParams() as $parameter) {
-            foreach (['StdVector', 'StdMap', 'StdOrderedMap'] as $name) {
+            foreach (['StdVector', 'StdMap', 'StdOrderedMap', 'StdList', 'StdDict'] as $name) {
                 $attribute = self::find($parameter, $name);
                 if ($attribute !== null) {
                     throw new CompileTimeAttributeError(

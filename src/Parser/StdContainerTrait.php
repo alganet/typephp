@@ -24,17 +24,31 @@ use TypePhp\Transform\CompileTimeAttribute;
 
 trait StdContainerTrait
 {
-    protected function parseStdParameterDefinition(Node\Param $param): ?array
+    protected function validateStdAttributeType(Node\Param|Node\Stmt\Property $owner, string $name, string $storage): void
+    {
+        $type = $owner->type;
+        if ($type === null) {
+            return;
+        }
+        if ($type instanceof Node\Name || $type instanceof Node\Identifier) {
+            [$resolvedType] = $this->resolveTypeDecl($type, $owner instanceof Node\Param
+                ? self::DECL_TYPE_OF_PARAM : self::DECL_TYPE_OF_PROPERTY);
+            if ($resolvedType === ($storage === 'box' ? Type::BOX : Type::ARRAY)) {
+                return;
+            }
+        }
+        $this->fatalError($owner, $name . ': a PHP type cannot also be declared unless it is ' . $storage);
+    }
+
+    protected function parseStdParameterDefinition(Node\Param|Node\Stmt\Property $param): ?array
     {
         foreach (['StdVector' => 'vector', 'StdMap' => 'map', 'StdOrderedMap' => 'orderedMap'] as $name => $method) {
             $attribute = CompileTimeAttribute::find($param, $name);
             if ($attribute === null) {
                 continue;
             }
-            if ($param->type !== null) {
-                $this->fatalError($param, $name . ' is the parameter type declaration; a PHP type cannot also be declared');
-            }
-            if ($param->byRef || $param->variadic || $param->default !== null || $param->isPromoted()) {
+            $this->validateStdAttributeType($param, $name, 'box');
+            if ($param instanceof Node\Param && ($param->byRef || $param->variadic || $param->default !== null || $param->isPromoted())) {
                 $this->fatalError($param, $name . ' does not support reference, variadic, defaulted or promoted parameters');
             }
             $expected = $method === 'vector' ? 1 : 2;
@@ -783,7 +797,7 @@ trait StdContainerTrait
             return [
                 'type' => match ($expr->name->name) {
                     'Int', 'Float', 'Bool', 'BigInt', 'BigFloat', 'Decimal' => $this->parseStdNativeType($expr, $owner),
-                    'String' => Type::STR,
+                    'String', 'Str' => Type::STR,
                     'Array' => Type::ARRAY,
                     'Object' => Type::OBJECT,
                     'Any' => Type::VAR,
@@ -933,7 +947,7 @@ trait StdContainerTrait
         if (strcasecmp($className, 'Type') === 0 && $constName === 'Int') {
             return Type::INT;
         }
-        if (strcasecmp($className, 'Type') === 0 && $constName === 'String') {
+        if (strcasecmp($className, 'Type') === 0 && in_array($constName, ['String', 'Str'], true)) {
             return Type::STR;
         }
         $this->fatalError($expr, "{$owner} key only supports Type::Int or Type::String");

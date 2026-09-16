@@ -115,28 +115,32 @@ final readonly class Constructor
 {
 }
 
-#[Attribute(Attribute::TARGET_PROPERTY)]
-final readonly class ArrayDef
-{
-    public function __construct(string $keyOrValueType, ?string $valueType = null)
-    {
-    }
-}
-
-#[Attribute(Attribute::TARGET_PARAMETER)]
+#[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
 final readonly class StdVector
 {
     public function __construct(string $valueType) {}
 }
 
-#[Attribute(Attribute::TARGET_PARAMETER)]
+#[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
 final readonly class StdMap
 {
     public function __construct(string $keyType, string $valueType) {}
 }
 
-#[Attribute(Attribute::TARGET_PARAMETER)]
+#[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
 final readonly class StdOrderedMap
+{
+    public function __construct(string $keyType, string $valueType) {}
+}
+
+#[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
+final readonly class StdList
+{
+    public function __construct(string $valueType) {}
+}
+
+#[Attribute(Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY)]
+final readonly class StdDict
 {
     public function __construct(string $keyType, string $valueType) {}
 }
@@ -154,6 +158,7 @@ final class Type
     public const string BigFloat = 'bigfloat';
     public const string Decimal = 'decimal';
     public const string String = 'string';
+    public const string Str = 'string';
     public const string Array = 'array';
     public const string Object = 'object';
     public const string Any = 'any';
@@ -252,6 +257,16 @@ class std
     }
 
     public static function vector(mixed $value_type, ?int $size = null): array
+    {
+        return [];
+    }
+
+    public static function list(mixed $valueType): array
+    {
+        return [];
+    }
+
+    public static function dict(mixed $keyType, mixed $valueType): array
     {
         return [];
     }

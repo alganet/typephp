@@ -81,7 +81,7 @@ AST，待全部项目符号就绪后再在 convert 阶段解析。这一两阶�
 - **编译期函数与关键词** —— `std::any()`、`std::object()`、`std::ref()`、
   `std::expected()`、`std::unexpected()`，以及 `toObject()`、`toInt()`、
   `toString()`、`toArray()` 等。
-- **编译期安全检查** —— `#[Immutable]` 只读契约和 `#[ArrayDef]` 数组结构元数据，
+- **编译期安全检查** —— `#[Immutable]` 只读契约和 `StdList` / `StdDict` 数组类型注解，
   在编译期检查，零运行时开销。
 - **编译期代码生成** —— `#[Getter]`、`#[Setter]`、`#[With]`、`#[Constructor]`、
   `#[Printer]` 和 `#[Arrayable]` 根据属性声明生成类型安全的方法。
@@ -736,7 +736,7 @@ GitHub Actions 会在 PHP 8.4 和 8.5 上分别运行 PHPUnit 与自举 PHPT。�
 - [编译期函数](docs/zh-cn/COMPILE_TIME_FUNCTIONS.md) —— `std::any()`、`std::ref()`、`std::expected()` 等
 - [混合 C++/PHP](docs/zh-cn/MIXED_CPP_PHP.md) —— C++/PHP 互操作
 - [`#[Immutable]`](docs/zh-cn/IMMUTABLE.md) —— 编译期只读契约
-- [`#[ArrayDef]`](docs/zh-cn/ARRAY_DEF.md) —— 强类型数组属性契约
+- [强类型 PHP 数组与类型注解](docs/zh-cn/TYPED_ARRAYS.md) —— 强类型数组属性契约
 - [Property hooks](docs/zh-cn/PROPERTY_HOOKS.md) —— PHP 8.4 hook 降级和运行时元数据
 - [对象存储模型](docs/zh-cn/OBJECT_STORAGE_AND_PASSING_MODELS.md) —— Zend object、Box 与 Native class 边界
 - [Generator](docs/zh-cn/YIELD_GENERATOR.md) —— 生成器降级与生命周期

@@ -205,7 +205,7 @@ trait FunctionCallTrait
                 $resolvedTarget = $functionDef->getNamespacedName();
                 $expr->setAttribute('nativeCall', $nativeFn);
                 if ($expr->isFirstClassCallable()
-                    && $this->functionUsesNativeObject($functionDef)
+                    && $this->functionRequiresNativeAbi($functionDef)
                 ) {
                     $this->fatalError($expr, 'Native ABI functions cannot be converted to Zend closures');
                 }
@@ -298,6 +298,12 @@ trait FunctionCallTrait
             }
             $canOptimizeBuiltinFallback = $functionTarget['definitelyGlobal']
                 || ($functionTarget['namespacedFallback'] && $globalName !== 'get_called_class');
+            if ($canOptimizeBuiltinFallback && in_array($globalName, ['array_key_exists', 'key_exists'], true)) {
+                $typedKeyExists = $this->parseTypedArrayKeyExistsCall($expr);
+                if ($typedKeyExists !== null) {
+                    return $typedKeyExists;
+                }
+            }
             $code = $canOptimizeBuiltinFallback
                 ? $this->parseFuncCallWithOptimizer($globalName, $expr)
                 : false;

@@ -75,6 +75,8 @@ class FunctionContext
      * @var array<string, array>
      */
     public array $stdContainers = [];
+    /** @var array<string, array{kind: string, keyType: string, type: string, class: ?string}> */
+    public array $typedArrays = [];
     public array $localVars = [];
     /** @var array<string, string> Local variable => forced fallback storage type. */
     public array $varTypeDegradations = [];

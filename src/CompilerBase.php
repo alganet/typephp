@@ -92,7 +92,6 @@ use TypePhp\TypeSystem\NativeTypeCompatibilityTrait;
 use TypePhp\NativeClass\NativeClassSupportTrait;
 use TypePhp\NativeClass\NativeGlobalTypeResolver;
 use TypePhp\Immutable\ImmutableSupportTrait;
-use TypePhp\ArrayDef\ArrayDefSupportTrait;
 use PhpParser\Modifiers;
 use PhpParser\Node;
 use PhpParser\Node\ArrayItem;
@@ -115,7 +114,7 @@ class CompilerBase implements PropertyAccessContext
     use NativeTypeCompatibilityTrait;
     use NativeClassSupportTrait;
     use ImmutableSupportTrait;
-    use ArrayDefSupportTrait;
+    use \TypePhp\Parser\TypedArrayTrait;
     use NativeBuildConfigurationTrait;
     use PythonModuleTrait;
     use DeclarationSymbolTrait;
@@ -2362,6 +2361,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function detectClassOfExpr(NodeAbstract $expr): string
     {
+        if (($typedArray = $this->getTypedArrayAccessDefinition($expr)) !== null) {
+            return $typedArray['class'] ?? '';
+        }
         // Error suppression changes diagnostics only; it must never erase the
         // static type of the wrapped expression. This is especially important
         // for Native objects because treating their typed pointer as php::Var
@@ -2720,6 +2722,7 @@ class CompilerBase implements PropertyAccessContext
             if ($v->expr === null) {
                 return 'return ' . Type::REF . '{};';
             }
+            $this->assertTypedArrayReferenceForbidden($v->expr);
             if ($v->expr instanceof CallLike) {
                 $returnsByRef = $this->resolveRefReturningCall($v->expr);
                 if ($returnsByRef !== false) {
@@ -3618,6 +3621,9 @@ class CompilerBase implements PropertyAccessContext
                 }
                 break;
             case 'Expr_ArrayDimFetch':
+                if (($typedArray = $this->getTypedArrayAccessDefinition($expr)) !== null) {
+                    return $typedArray['type'];
+                }
                 if ($this->isStdArrayExpr($expr)) {
                     if (!$expr->hasAttribute('stdArrayDimFetch')) {
                         $this->parseStdArrayDimFetch($expr);
@@ -3709,6 +3715,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parsePreInc(Expr\PreInc $expr): string
     {
+        if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array increment/decrement requires an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->assertNativeObjectOperatorOperandSupported($expr->var, $expr, '++');
@@ -4120,6 +4129,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parsePostOp(Expr\PostDec|Expr\PostInc $expr, string $op): string
     {
+        if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array increment/decrement requires an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->assertNativeObjectOperatorOperandSupported($expr->var, $expr, str_repeat($op, 2));
@@ -4172,6 +4184,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parsePreDec(Expr\PreDec $expr): string
     {
+        if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array increment/decrement requires an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->assertNativeObjectOperatorOperandSupported($expr->var, $expr, '--');
@@ -4747,9 +4762,14 @@ class CompilerBase implements PropertyAccessContext
     protected function parseChainedExpr(NodeAbstract $node, string $op, bool $getValue = false): string
     {
         if ($op === self::OP_REFVAL) {
+            $this->assertTypedArrayReferenceForbidden($node);
             $this->assertNativeArrayAccessReferenceForbidden($node);
             $this->assertNativeObjectReferenceForbidden($node, $node);
             $this->assertVariableReferenceStorage($node, $node);
+        }
+        if ($node instanceof Expr\ArrayDimFetch && $this->getTypedArrayAccessDefinition($node) !== null
+            && in_array($op, [self::OP_ISSET, self::OP_EMPTY, self::OP_NOT_EMPTY], true)) {
+            return $this->parseTypedArrayPresence($node, $op, $getValue);
         }
         if ($node instanceof Expr\ArrayDimFetch
             && $this->isNativeObjectClass($this->detectClassOfExpr($node->var))

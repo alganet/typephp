@@ -1463,7 +1463,7 @@ CODE;
             if ($functionDef->method) {
                 continue;
             }
-            if ($this->functionUsesNativeObject($functionDef)) {
+            if ($this->functionRequiresNativeAbi($functionDef)) {
                 continue;
             }
             $fullName = $functionDef->getNamespacedName();
@@ -3010,15 +3010,13 @@ CODE;
     public function isNativeFunctionForStub(string $function): bool
     {
         return $this->hasFunction($function)
-            && $this->functionUsesNativeObject($this->getFunction($function));
+            && $this->functionRequiresNativeAbi($this->getFunction($function));
     }
 
     public function isNativeMethodForStub(string $class, string $method): bool
     {
-        $class = ltrim($class, '\\');
-        return $this->hasClass($class)
-            && $this->getClass($class)->hasMethod($method)
-            && $this->functionUsesNativeObject($this->getClass($class)->getMethod($method)->functionDef);
+        $function = $this->findAotMethodFunctionDef(ltrim($class, '\\'), $method);
+        return $function !== null && $this->functionRequiresNativeAbi($function);
     }
 
     public function getArgInfoHeaderFile(string $file, bool $relative = false): string
@@ -4209,7 +4207,7 @@ CODE;
         }
 
         foreach ($this->functionDefineInFile as $functionDef) {
-            if ($functionDef->attributeFactory || $this->functionUsesNativeObject($functionDef)) {
+            if ($functionDef->attributeFactory || $this->functionRequiresNativeAbi($functionDef)) {
                 continue;
             }
             $cppCode .= $this->genFunctionWrapper($functionDef);
@@ -5339,7 +5337,8 @@ CODE;
             $typeA = $paramA->type ? $this->typeNodeToString($paramA->type) : null;
             $typeB = $paramB->type ? $this->typeNodeToString($paramB->type) : null;
             if ($typeA !== $typeB
-                || $this->parseStdParameterDefinition($paramA) !== $this->parseStdParameterDefinition($paramB)) {
+                || $this->parseStdParameterDefinition($paramA) !== $this->parseStdParameterDefinition($paramB)
+                || $this->parseTypedArrayParameterDefinition($paramA) !== $this->parseTypedArrayParameterDefinition($paramB)) {
                 $this->fatalError(
                     $classStmt,
                     "Trait `{$traitA}` and Trait `{$traitB}` define the same abstract method `{$methodName}` " .
@@ -6030,7 +6029,7 @@ CODE;
             }
             $methods = $classDef->methods;
             foreach ($methods as $methodDef) {
-                if ($this->functionUsesNativeObject($methodDef->functionDef)) {
+                if ($this->functionRequiresNativeAbi($methodDef->functionDef)) {
                     continue;
                 }
                 $cppCode .= $this->genMethodWrapper($classDef, $methodDef);
@@ -6094,6 +6093,9 @@ CODE;
                 ? Type::ARRAY
                 : ($this->getNativeObjectArgumentType($argInfo) ?? $argInfo->type);
             $this->addArgument($argInfo->name, $argumentType);
+            if ($argInfo->typedArray !== null) {
+                $this->context->typedArrays[$argInfo->name] = $argInfo->typedArray;
+            }
             if (!$argInfo->variadic and $argInfo->declaredClass) {
                 $this->addObject($argInfo->name, $argInfo->declaredClass);
             }
@@ -6928,6 +6930,9 @@ CODE;
 
     private function isParameterTypeOverrideCompatible(ArgInfo $childArg, ArgInfo $parentArg): bool
     {
+        if ($childArg->typedArray !== null || $parentArg->typedArray !== null) {
+            return $childArg->typedArray !== null && $childArg->typedArray === $parentArg->typedArray;
+        }
         // Child methods may omit parameter types (contravariance — accepting a
         // wider set of inputs is always compatible with the parent contract).
         if ($this->isTopParameterType($childArg)) {
@@ -8371,7 +8376,8 @@ CODE;
             || $existing->type !== $incoming->type
             || $existing->class !== $incoming->class
             || $existing->nullable !== $incoming->nullable
-            || $existing->arrayDef != $incoming->arrayDef
+            || $existing->typedArray != $incoming->typedArray
+            || $existing->stdContainer != $incoming->stdContainer
         ) {
             return false;
         }
@@ -8449,14 +8455,14 @@ CODE;
             }
             foreach ($classDef->methods as $methodDef) {
                 if (!$methodDef->functionDef->abstractMethod
-                    && !$this->functionUsesNativeObject($methodDef->functionDef)) {
+                    && !$this->functionRequiresNativeAbi($methodDef->functionDef)) {
                     $code .= $this->genMethodWrapper($classDef, $methodDef);
                 }
             }
         }
         foreach ($this->symbols->functions() as $functionDef) {
             if ($functionDef->stub && !$functionDef->method && !$functionDef->attributeFactory
-                && !$this->functionUsesNativeObject($functionDef)) {
+                && !$this->functionRequiresNativeAbi($functionDef)) {
                 $code .= $this->genFunctionWrapper($functionDef);
             }
         }
