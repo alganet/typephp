@@ -21,6 +21,63 @@ use TypePhp\Exception\PlaceHolder;
 trait FunctionCallTrait
 {
     /**
+     * Resolve a bare identifier used specifically in a callable parameter.
+     * Constants retain PHP precedence; only an otherwise unresolved constant
+     * fetch may be treated as a TypePHP function symbol.
+     */
+    private function resolveBareCallableFunctionName(Expr\ConstFetch $expr): ?string
+    {
+        if (!$expr->name instanceof Node\Name) {
+            return null;
+        }
+
+        $source = ltrim($this->parseIdentifier($expr->name), '\\');
+        if ($source === ''
+            || str_contains($source, '::')
+            || in_array(strtolower($source), ['null', 'true', 'false'], true)
+            || isset($this->useConstants[$source])
+        ) {
+            return null;
+        }
+
+        [$constantName, $runtimeNamespaceFallback] = $this->resolveConstantFetchName(
+            $expr,
+            $source,
+        );
+        if ($this->hasConstant($constantName)
+            || $constantName === 'PHP_EOL'
+            || $this->isInternalConstant($constantName)
+        ) {
+            return null;
+        }
+        if ($runtimeNamespaceFallback
+            && ($this->hasConstant($source)
+                || $source === 'PHP_EOL'
+                || $this->isInternalConstant($source))
+        ) {
+            return null;
+        }
+
+        $target = $this->resolveStaticFunctionCallTarget($expr->name);
+        $nativeFunction = $this->findNativeFunction($target['nativeLookup']);
+        if ($nativeFunction !== false) {
+            $function = $this->getFunction($nativeFunction);
+            if ($this->functionRequiresNativeAbi($function)) {
+                $this->fatalError($expr, 'Native ABI functions cannot be used as callable arguments');
+            }
+            return $function->getNamespacedName();
+        }
+
+        if (($target['definitelyGlobal'] || $target['namespacedFallback'])
+            && $this->isInternalFunction($target['lower'])
+        ) {
+            return $target['lower'];
+        }
+
+        return null;
+    }
+
+    /**
      * Resolve the one static function name used by every call path. Function
      * imports and function names are case-insensitive, unlike constant names.
      *

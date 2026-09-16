@@ -1247,6 +1247,8 @@ class Preprocessor extends CompilerBase
             $argInfo->nullable = true;
         }
         $argInfo->undeclared = $param->type === null;
+        $argInfo->acceptsCallable = $param->type !== null
+            && $this->typeNodeContainsCallable($param->type);
         if (
             $param->type !== null
             && !$param->type instanceof NullableType
@@ -2175,7 +2177,7 @@ class Preprocessor extends CompilerBase
         [$declaredType, $class] = $v->type
             ? $this->resolveTypeDecl($v->type, self::DECL_TYPE_OF_CONST)
             : [null, ''];
-        if ($v->type !== null && $this->typeDeclContainsCallable($v->type)) {
+        if ($v->type !== null && $this->typeNodeContainsCallable($v->type)) {
             $constName = $v->consts !== [] ? $this->parseIdentifier($v->consts[0]->name) : '';
             $this->fatalError(
                 $v,
@@ -2343,7 +2345,7 @@ class Preprocessor extends CompilerBase
         // `callable` is a runtime-context type (a string or array may or may
         // not be callable depending on scope), so Zend forbids it in property
         // types entirely - bare, nullable, or as a union member.
-        if ($typeNode !== null && $this->typeDeclContainsCallable($typeNode)) {
+        if ($typeNode !== null && $this->typeNodeContainsCallable($typeNode)) {
             $this->fatalError(
                 $errorNode,
                 "Property `{$this->classDef->getNamespacedName(false)}::\${$name}` cannot have type `{$this->typeCheckNodeToString($typeNode)}`",
@@ -2417,31 +2419,6 @@ class Preprocessor extends CompilerBase
         }
         $this->classDef->properties[$name] = $propDef;
         return $propDef;
-    }
-
-    /**
-     * Whether a declared type mentions `callable` outside an intersection.
-     * Zend forbids callable in property and class-constant types; callable
-     * inside an intersection is rejected first, with its own diagnostic, by
-     * the common declaration validation in parseTypeDecl().
-     */
-    private function typeDeclContainsCallable(NodeAbstract $typeNode): bool
-    {
-        if ($typeNode instanceof NullableType) {
-            return $this->typeDeclContainsCallable($typeNode->type);
-        }
-        if ($typeNode instanceof UnionType) {
-            foreach ($typeNode->types as $member) {
-                if ($this->typeDeclContainsCallable($member)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if ($typeNode instanceof IntersectionType) {
-            return false;
-        }
-        return strtolower($this->parseIdentifier($typeNode)) === 'callable';
     }
 
     private function validateAsymmetricPropertyDeclaration(
@@ -3242,7 +3219,7 @@ class Preprocessor extends CompilerBase
                     if ($stmt->type) {
                         $this->validateClassScopeTypeKeywords($stmt->type, true, false);
                         [$type, $class] = $this->resolveTypeDecl($stmt->type, self::DECL_TYPE_OF_CONST);
-                        if ($this->typeDeclContainsCallable($stmt->type)) {
+                        if ($this->typeNodeContainsCallable($stmt->type)) {
                             $this->fatalError(
                                 $stmt,
                                 "Class constant `{$interfaceName}::{$constName}` cannot have type `{$this->typeCheckNodeToString($stmt->type)}`",
@@ -3382,7 +3359,7 @@ class Preprocessor extends CompilerBase
         $nullable = $property->type instanceof NullableType;
         foreach ($property->props as $prop) {
             $name = $this->parseIdentifier($prop->name);
-            if ($property->type !== null && $this->typeDeclContainsCallable($property->type)) {
+            if ($property->type !== null && $this->typeNodeContainsCallable($property->type)) {
                 $this->fatalError(
                     $property,
                     "Property `{$this->interfaceDef->getNamespacedName(false)}::\${$name}` cannot have type `{$this->typeCheckNodeToString($property->type)}`",

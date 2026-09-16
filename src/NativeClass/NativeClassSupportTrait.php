@@ -335,6 +335,7 @@ trait NativeClassSupportTrait
         }
         $node = $this->reflectionTypeToNode($type, $declaringClass);
         $argument->typeStr = $this->typeCheckNodeToString($node);
+        $argument->acceptsCallable = $this->typeNodeContainsCallable($node);
         if ($node instanceof Node\NullableType
             || $node instanceof Node\UnionType
             || $node instanceof Node\IntersectionType

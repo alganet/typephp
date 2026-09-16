@@ -47,6 +47,8 @@ class ArgInfo
     public bool $nullable = false;
     public bool $undeclared = false;
     public bool $explicitMixed = false;
+    /** The declared parameter type accepts callable values. */
+    public bool $acceptsCallable = false;
     public bool $property = false;
     /** This parameter binding and any referenced object are read-only in the callee. */
     public bool $immutable = false;

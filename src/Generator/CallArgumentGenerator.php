@@ -22,6 +22,101 @@ trait CallArgumentGenerator
     /** Guard against a broken lowering path producing an unbounded call. */
     private const CALL_ARGUMENT_LIMIT = 65_536;
 
+    private function argInfoAcceptsCallable(?ArgInfo $argInfo): bool
+    {
+        return $argInfo?->acceptsCallable ?? false;
+    }
+
+    private function reflectionTypeAcceptsCallable(?\ReflectionType $type): bool
+    {
+        if ($type instanceof \ReflectionNamedType) {
+            return strcasecmp($type->getName(), 'callable') === 0;
+        }
+        if ($type instanceof \ReflectionUnionType) {
+            foreach ($type->getTypes() as $member) {
+                if ($this->reflectionTypeAcceptsCallable($member)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private function callArgumentAcceptsCallable(
+        string $funcName,
+        string $className,
+        int $index,
+        ?string $argName,
+    ): bool {
+        if ($funcName === '') {
+            return false;
+        }
+
+        $argInfo = $argName === null
+            ? $this->getAotCallArgInfo($funcName, $className, $index)
+            : $this->getAotCallArgInfoByName($funcName, $className, $argName);
+        if ($argInfo !== null) {
+            return $this->argInfoAcceptsCallable($argInfo);
+        }
+
+        if ($className !== '') {
+            if ($className === self::DYNAMIC_CALLED_CLASS) {
+                return false;
+            }
+            $class = Reflection::getClass($className);
+            if ($class === null || !$class->hasMethod($funcName)) {
+                return false;
+            }
+            $parameters = $class->getMethod($funcName)->getParameters();
+        } else {
+            $function = Reflection::getFunction($funcName);
+            if ($function === null) {
+                return false;
+            }
+            $parameters = $function->getParameters();
+        }
+
+        $variadic = null;
+        foreach ($parameters as $parameterIndex => $parameter) {
+            if ($parameter->isVariadic()) {
+                $variadic = $parameter;
+            }
+            if (($argName !== null && $parameter->getName() === $argName)
+                || ($argName === null && $parameterIndex === $index)
+            ) {
+                return $this->reflectionTypeAcceptsCallable($parameter->getType());
+            }
+        }
+
+        return $argName === null
+            && $variadic !== null
+            && $this->reflectionTypeAcceptsCallable($variadic->getType());
+    }
+
+    private function normalizeBareFunctionCallableArgument(
+        Node\Arg $arg,
+        bool $acceptsCallable,
+    ): Node\Arg {
+        if (!$acceptsCallable
+            || $arg->unpack
+            || !$arg->value instanceof Expr\ConstFetch
+        ) {
+            return $arg;
+        }
+
+        $function = $this->resolveBareCallableFunctionName($arg->value);
+        if ($function === null) {
+            return $arg;
+        }
+
+        $normalized = clone $arg;
+        $normalized->value = new Node\Scalar\String_(
+            $function,
+            $arg->value->getAttributes(),
+        );
+        return $normalized;
+    }
+
     protected function parseNativeCallArgs(
         array $callArgs,
         string $nativeFunc,
@@ -473,6 +568,17 @@ trait CallArgumentGenerator
             foreach ($args as $i => $arg) {
                 if ($this->isPlaceholderExpr($arg)) {
                     throw new PlaceHolder();
+                }
+                if (!$arg->unpack && $arg->value instanceof Expr\ConstFetch) {
+                    $arg = $this->normalizeBareFunctionCallableArgument(
+                        $arg,
+                        $this->callArgumentAcceptsCallable(
+                            $funcName,
+                            $className,
+                            $i,
+                            $arg->name?->name,
+                        ),
+                    );
                 }
                 $this->validateTypedArrayDynamicArgument($arg, $funcName, $className, $i);
                 if ($arg->unpack) {
