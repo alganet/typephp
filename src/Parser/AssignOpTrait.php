@@ -555,6 +555,9 @@ trait AssignOpTrait
                 if ($copyAssign !== null) {
                     return $copyAssign;
                 }
+                if (!empty($this->context->stdContainers[$var]['parameter'])) {
+                    $this->fatalError($left, 'Std container parameter bindings cannot be replaced; modify the container contents instead');
+                }
             }
             // Infer the type and obtain the object's class name; return an empty string for non-objects
             $rightClass = $this->detectClassOfExpr($right);

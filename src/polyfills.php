@@ -123,6 +123,24 @@ final readonly class ArrayDef
     }
 }
 
+#[Attribute(Attribute::TARGET_PARAMETER)]
+final readonly class StdVector
+{
+    public function __construct(string $valueType) {}
+}
+
+#[Attribute(Attribute::TARGET_PARAMETER)]
+final readonly class StdMap
+{
+    public function __construct(string $keyType, string $valueType) {}
+}
+
+#[Attribute(Attribute::TARGET_PARAMETER)]
+final readonly class StdOrderedMap
+{
+    public function __construct(string $keyType, string $valueType) {}
+}
+
 /**
  * Public compile-time type symbols shared by MethodsFor providers and std containers.
  * This root class is deliberately distinct from the compiler-internal TypePhp\Type.

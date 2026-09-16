@@ -19,6 +19,8 @@ class ArgInfo
     public string $type;
     public string $default = '';
     public ?ArrayInitPlan $arrayInitPlan = null;
+    /** Explicit std-container contract; the call ABI remains php::Var. */
+    public ?array $stdContainer = null;
     /** Original declaration AST; lowered to $default only in the convert phase. */
     public ?Expr $defaultExpr = null;
     public ?Expr $defaultValue = null;

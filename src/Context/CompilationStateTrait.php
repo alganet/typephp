@@ -40,6 +40,9 @@ trait CompilationStateTrait
         foreach ($analysis['captures'] as $sourceName => $_) {
             $name = $this->escapeVarName($sourceName);
             if (isset($this->context->arguments[$name])) {
+                if (!empty($this->context->stdContainers[$name]['parameter'])) {
+                    $this->fatalError(new Variable($sourceName), 'Std container parameters cannot be captured by reference');
+                }
                 $type = $this->getRawVarType($name);
                 if (!$degradeArguments
                     || $type === Type::VAR

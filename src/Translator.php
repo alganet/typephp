@@ -5338,7 +5338,8 @@ CODE;
             $paramB = $b->params[$i];
             $typeA = $paramA->type ? $this->typeNodeToString($paramA->type) : null;
             $typeB = $paramB->type ? $this->typeNodeToString($paramB->type) : null;
-            if ($typeA !== $typeB) {
+            if ($typeA !== $typeB
+                || $this->parseStdParameterDefinition($paramA) !== $this->parseStdParameterDefinition($paramB)) {
                 $this->fatalError(
                     $classStmt,
                     "Trait `{$traitA}` and Trait `{$traitB}` define the same abstract method `{$methodName}` " .
@@ -6104,6 +6105,7 @@ CODE;
                 $this->markNativeObjectNonNull($argInfo->name);
             }
         }
+        $stdParameterBindings = $this->initializeStdContainerParameters($this->functionDef);
         $this->initializeImmutableFunctionContext();
         $this->prepareReferenceCaptureDegradations($v->stmts, true);
 
@@ -6226,6 +6228,7 @@ CODE;
             ? $this->getIndent() . 'auto &this_ = *this;' . PHP_EOL
             : '';
         $preamble .= $this->genDegradedArgumentLocals();
+        $preamble .= $stdParameterBindings;
         $preamble .= $this->genScopeVarDecl();
         $preamble .= $this->genNativeObjectParameterChecks($this->functionDef);
         // Runtime union/nullable parameter type checks
@@ -6932,6 +6935,10 @@ CODE;
         }
         if ($this->isTopParameterType($parentArg)) {
             return false;
+        }
+        if ($childArg->stdContainer !== null || $parentArg->stdContainer !== null) {
+            return $childArg->stdContainer !== null && $parentArg->stdContainer !== null
+                && $this->getStdTypeKey($childArg->stdContainer) === $this->getStdTypeKey($parentArg->stdContainer);
         }
 
         $parentAcceptedTypes = $this->getParameterAcceptedTypes($parentArg);

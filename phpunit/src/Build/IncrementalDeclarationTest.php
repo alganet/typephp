@@ -119,6 +119,36 @@ PHP);
         self::assertSame($this->provider, $symbols['constant:Incremental\\LIMIT']);
     }
 
+    public function testStdContainerParameterContractsSurviveWarmConversionAndInvalidateCallers(): void
+    {
+        file_put_contents($this->provider, <<<'PHP'
+<?php
+namespace Incremental;
+function answer(#[\StdVector(\Type::Int)] $vec): int { return $vec[0]; }
+PHP);
+        file_put_contents($this->consumer, <<<'PHP'
+<?php
+function main(): void {
+    $vec = \std::vector(\Type::Int);
+    $vec[] = 7;
+    var_dump(\Incremental\answer($vec));
+}
+PHP);
+        $first = $this->convertProject();
+        $providerCpp = $this->invoke($first, 'getCppFile', $this->provider);
+        $coldCode = file_get_contents($providerCpp);
+        self::assertStringContainsString('auto &vec_ref = php::toStdContainer<php::StdVector<php::Int>>', $coldCode);
+        $second = $this->convertProject();
+        self::assertFalse($this->invoke($second, 'shouldRegeneratePhpFile', $this->provider));
+        self::assertSame($coldCode, file_get_contents($providerCpp));
+        $function = $this->invoke($second, 'getFunction', 'incremental__answer');
+        self::assertSame('vector', $function->argInfoList[0]->stdContainer['kind']);
+        file_put_contents($this->provider, str_replace('Type::Int', 'Type::Float', file_get_contents($this->provider)));
+        $third = $this->convertProject();
+        self::assertTrue($this->invoke($third, 'shouldRegeneratePhpFile', $this->consumer));
+        self::assertStringContainsString('php::StdVector<php::Float>', file_get_contents($providerCpp));
+    }
+
     public function testUnchangedGeneratedCppKeepsItsTimestamp(): void
     {
         $first = $this->convertProject();

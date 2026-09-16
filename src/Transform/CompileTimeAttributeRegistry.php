@@ -26,6 +26,7 @@ final class CompileTimeAttributeRegistry
     public const ARGUMENTS_VALIDATE = 'validate';
     public const ARGUMENTS_WASM_EXPORT = 'wasm_export';
     public const ARGUMENTS_ARRAY_DEF = 'array_def';
+    public const ARGUMENTS_STD_CONTAINER = 'std_container';
 
     public const PHASE_PREPROCESS = 'preprocess';
     public const PHASE_ENTER = 'enter';
@@ -101,6 +102,10 @@ final class CompileTimeAttributeRegistry
         $add('Cold', [self::TARGET_FUNCTION, self::TARGET_METHOD], 'Cold can only be applied to functions or methods', self::ARGUMENTS_NONE, self::PHASE_ENTER, true, ['Hot']);
         $add('Constructor', [self::TARGET_DECLARED_PROPERTY], 'Constructor can only be applied to instance properties', self::ARGUMENTS_NONE, self::PHASE_CLASS_LEAVE);
         $add('ArrayDef', [self::TARGET_PROPERTY], 'ArrayDef can only be applied to properties', self::ARGUMENTS_ARRAY_DEF, self::PHASE_PREPROCESS);
+        $containerAttributes = ['StdVector', 'StdMap', 'StdOrderedMap'];
+        foreach ($containerAttributes as $name) {
+            $add($name, [self::TARGET_PARAMETER], $name . ' can only be applied to function or method parameters', self::ARGUMENTS_STD_CONTAINER, self::PHASE_PREPROCESS, true, array_values(array_diff($containerAttributes, [$name])));
+        }
 
         return $definitions;
     }

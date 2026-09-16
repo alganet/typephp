@@ -17,9 +17,85 @@ use PhpParser\Node\Name;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\NodeAbstract;
+use PhpParser\Node;
+use TypePhp\Context\FunctionContext;
+use TypePhp\Entity\FunctionDef;
+use TypePhp\Transform\CompileTimeAttribute;
 
 trait StdContainerTrait
 {
+    protected function parseStdParameterDefinition(Node\Param $param): ?array
+    {
+        foreach (['StdVector' => 'vector', 'StdMap' => 'map', 'StdOrderedMap' => 'orderedMap'] as $name => $method) {
+            $attribute = CompileTimeAttribute::find($param, $name);
+            if ($attribute === null) {
+                continue;
+            }
+            if ($param->type !== null) {
+                $this->fatalError($param, $name . ' is the parameter type declaration; a PHP type cannot also be declared');
+            }
+            if ($param->byRef || $param->variadic || $param->default !== null || $param->isPromoted()) {
+                $this->fatalError($param, $name . ' does not support reference, variadic, defaulted or promoted parameters');
+            }
+            $expected = $method === 'vector' ? 1 : 2;
+            if (count($attribute->args) !== $expected) {
+                $this->fatalError($attribute, $name . ' expects ' . $expected . ' type argument(s)');
+            }
+            foreach ($attribute->args as $argument) {
+                if ($argument->name !== null || $argument->unpack || $argument->byRef) {
+                    $this->fatalError($argument, $name . ' requires positional type arguments');
+                }
+            }
+            // Reuse factory parsing, including class-name resolution and the
+            // canonical template/type-ID key, without leaking locals into the
+            // declaration context. Cache only the contract, not a build's ID.
+            $context = $this->context;
+            $this->context = new FunctionContext();
+            try {
+                $call = new StaticCall(new Name('std'), new Identifier($method), $attribute->args);
+                if ($method === 'vector') {
+                    $this->parseStdVector('__std_parameter', $call);
+                } elseif ($method === 'map') {
+                    $this->parseStdMap('__std_parameter', $call);
+                } else {
+                    $this->parseStdOrderedMap('__std_parameter', $call);
+                }
+                $info = $this->context->stdContainers['__std_parameter'];
+                if ($this->isNativeObjectClass($info['class'] ?? '')) {
+                    $this->fatalError($attribute, 'Std container parameters cannot hold Native objects across a Box boundary');
+                }
+                unset($info['typeId']);
+                return $info;
+            } finally {
+                $this->context = $context;
+            }
+        }
+        return null;
+    }
+
+    protected function initializeStdContainerParameters(FunctionDef $function): string
+    {
+        $code = '';
+        foreach ($function->argInfoList as $argument) {
+            if ($argument->stdContainer === null) {
+                continue;
+            }
+            $info = $this->addStdTypeId($argument->stdContainer);
+            $info['parameter'] = true;
+            $this->context->stdContainers[$argument->name] = $info;
+            $type = match ($info['kind']) {
+                'vector' => Type::STD_VECTOR,
+                'map' => Type::STD_MAP,
+                'ordered_map' => Type::STD_ORDERED_MAP,
+            };
+            $this->addLocalVar($argument->name, $type);
+            $code .= 'if (UNEXPECTED(!' . $argument->name . '.isBox())) { php::throwStdContainerTypeMismatch(); }' . PHP_EOL;
+            $code .= 'auto &' . $argument->name . '_ref = php::toStdContainer<' . $info['decl'] . '>('
+                . $argument->name . ', ' . $info['typeId'] . ');' . PHP_EOL;
+        }
+        return $code;
+    }
+
     /**
      * Resolve the Native value class of a std container factory without
      * creating container metadata. This is used before assignment lowering so

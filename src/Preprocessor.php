@@ -1376,7 +1376,14 @@ class Preprocessor extends CompilerBase
                 $this->fatalError($param, 'Cannot use `$this` as parameter of class method');
             }
             $argInfo = new ArgInfo();
+            $argInfo->stdContainer = $this->parseStdParameterDefinition($param);
+            if ($argInfo->stdContainer !== null && $functionDef->generator) {
+                $this->fatalError($param, 'Std container parameter attributes are not supported on generators');
+            }
             $type = $this->parseParameterType($param, $argInfo, $name);
+            if ($argInfo->stdContainer !== null) {
+                $argInfo->undeclared = false;
+            }
             $argInfo->name = $name;
             $argInfo->phpName = $phpName;
             $argInfo->type = $type;
@@ -1385,7 +1392,7 @@ class Preprocessor extends CompilerBase
             $argInfo->property = $param->isPromoted();
             $argInfo->immutable = \TypePhp\Transform\CompileTimeAttribute::consume($param, 'Immutable');
             if ($param->type === null || $param->type instanceof NullableType) {
-                $argInfo->nullable = true;
+                $argInfo->nullable = $argInfo->stdContainer === null;
             }
             if (($param->byRef && $param->type !== null && !Type::isTypedRefType($type))
                 || $param->type instanceof NullableType
