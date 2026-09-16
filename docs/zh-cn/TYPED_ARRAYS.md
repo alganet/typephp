@@ -4,6 +4,8 @@
 
 `std::list(T)` / `std::dict(K, V)` 保留普通 PHP 数组存储与写时复制，使用类型注解声明参数或属性的键和值类型：
 
+局部值也可由非空数组直接初始化并推导类型，例如 `std::list([9, 3, 5])` 和 `std::dict(['v1' => 999, 'v2' => 1000])`。表达式不限于字面量，但所有静态 value 类型必须完全一致；dict 的显式 key 也必须全部为同一种 Int 或 Str。任何 var/any/mixed key/value 都因无法可靠推导而编译报错。
+
 ```php
 class State
 {

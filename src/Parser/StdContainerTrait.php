@@ -224,6 +224,19 @@ trait StdContainerTrait
             return '';
         }
 
+        $initializer = $this->getStdValueInitializer($expr);
+        if ($initializer !== null) {
+            $inferred = $method === 'array'
+                ? $this->inferStdArrayInitializer($initializer)
+                : $this->inferStdFlatInitializer(
+                    $initializer,
+                    $method === 'orderedmap' ? 'std::orderedMap' : 'std::' . $method,
+                    $method === 'vector' ? 'positional' : 'map',
+                );
+            $class = $inferred['class'] ?? '';
+            return is_string($class) && $this->isNativeObjectClass($class) ? $class : '';
+        }
+
         if ($method === 'array') {
             $factory = $expr;
             while ($factory instanceof StaticCall
@@ -809,6 +822,175 @@ trait StdContainerTrait
         };
     }
 
+    /** Return the one-array value-initializer overload, if this call uses it. */
+    protected function getStdValueInitializer(Expr\StaticCall $expr): ?Expr\Array_
+    {
+        if (count($expr->args) !== 1 || !$expr->args[0]->value instanceof Expr\Array_) {
+            return null;
+        }
+        $argument = $expr->args[0];
+        if ($argument->name !== null || $argument->unpack || $argument->byRef) {
+            $this->fatalError($argument, 'Std container value initialization requires one positional array argument');
+        }
+        return $argument->value;
+    }
+
+    /** @return array{type: string, class: ?string} */
+    protected function inferStdInitializerValueType(NodeAbstract $expr, string $owner): array
+    {
+        $this->assertExprCanBeUsedAsValue($expr, $owner . ' value');
+        $type = Type::getReferencedType($this->detectTypeOfExpr($expr));
+        if ($type === Type::VAR) {
+            $this->fatalError($expr, $owner . ' cannot infer an element type from var/any');
+        }
+        if (!in_array($type, [
+            Type::INT,
+            Type::FLOAT,
+            Type::BOOL,
+            Type::STR,
+            Type::ARRAY,
+            Type::OBJECT,
+            Type::BIGINT,
+            Type::BIGFLOAT,
+            Type::DECIMAL,
+            Type::STREAM,
+            Type::BOX,
+        ], true)) {
+            $this->fatalError($expr, $owner . ' cannot infer a supported element type from this expression');
+        }
+        if ($type === Type::INT && $this->varIntTypes && $this->exprCanOverflowInt($expr)) {
+            $this->fatalError($expr, $owner . ' integer values that may widen require an explicit toInt() or native integer conversion');
+        }
+        $class = $type === Type::OBJECT ? $this->detectClassOfExpr($expr) : '';
+        return ['type' => $type, 'class' => $class !== '' ? $class : null];
+    }
+
+    protected function assertSameStdInitializerValueType(
+        array $expected,
+        array $actual,
+        NodeAbstract $expr,
+        string $owner,
+    ): void {
+        if ($expected['type'] !== $actual['type']
+            || strcasecmp($expected['class'] ?? '', $actual['class'] ?? '') !== 0
+        ) {
+            $this->fatalError($expr, $owner . ' initializer values must all have exactly the same type');
+        }
+    }
+
+    /**
+     * Infer a one-dimensional initializer.
+     *
+     * @param 'positional'|'integer'|'map' $keyMode
+     * @return array{type: string, class: ?string, keyType?: string, items: array}
+     */
+    protected function inferStdFlatInitializer(Expr\Array_ $array, string $owner, string $keyMode): array
+    {
+        if ($array->items === []) {
+            $this->fatalError($array, $owner . ' cannot infer types from an empty array');
+        }
+
+        $valueInfo = null;
+        $keyType = null;
+        foreach ($array->items as $item) {
+            if ($item === null || $item->unpack || $item->byRef) {
+                $this->fatalError($item ?? $array, $owner . ' initializer does not support holes, unpacking, or references');
+            }
+            if ($keyMode === 'positional' && $item->key !== null) {
+                $this->fatalError($item->key, $owner . ' initializer requires positional array elements');
+            }
+            if ($keyMode === 'map' && $item->key === null) {
+                $this->fatalError($item, $owner . ' initializer requires an explicit key for every value');
+            }
+            if ($item->key !== null && $keyMode !== 'positional') {
+                $actualKeyType = Type::getReferencedType($this->detectTypeOfExpr($item->key));
+                if (!in_array($actualKeyType, [Type::INT, Type::STR], true)) {
+                    $this->fatalError($item->key, $owner . ' initializer keys must have a statically known int or string type');
+                }
+                if ($actualKeyType === Type::INT && $this->varIntTypes && $this->exprCanOverflowInt($item->key)) {
+                    $this->fatalError($item->key, $owner . ' integer keys that may widen require an explicit toInt() or native integer conversion');
+                }
+                if ($keyMode === 'integer' && $actualKeyType !== Type::INT) {
+                    $this->fatalError($item->key, $owner . ' initializer keys must have type int');
+                }
+                if ($keyType !== null && $keyType !== $actualKeyType) {
+                    $this->fatalError($item->key, $owner . ' initializer keys must all have exactly the same type');
+                }
+                $keyType = $actualKeyType;
+            } elseif ($keyMode === 'integer') {
+                $keyType ??= Type::INT;
+            }
+
+            $actualValueInfo = $this->inferStdInitializerValueType($item->value, $owner);
+            if ($valueInfo === null) {
+                $valueInfo = $actualValueInfo;
+            } else {
+                $this->assertSameStdInitializerValueType($valueInfo, $actualValueInfo, $item->value, $owner);
+            }
+        }
+
+        $result = $valueInfo + ['items' => $array->items];
+        if ($keyMode !== 'positional') {
+            $result['keyType'] = $keyType ?? Type::INT;
+        }
+        return $result;
+    }
+
+    /**
+     * Infer the leaf type and rectangular shape of a nested std::array value.
+     *
+     * @return array{type: string, class: ?string, dimensions: list<int>, entries: list<array{path: list<int>, value: NodeAbstract}>}
+     */
+    protected function inferStdArrayInitializer(Expr\Array_ $array, string $owner = 'std::array'): array
+    {
+        if ($array->items === []) {
+            $this->fatalError($array, $owner . ' cannot infer types or dimensions from an empty array');
+        }
+
+        $leafInfo = null;
+        $childDimensions = null;
+        $entries = [];
+        $nested = null;
+        foreach ($array->items as $index => $item) {
+            if ($item === null || $item->unpack || $item->byRef || $item->key !== null) {
+                $this->fatalError($item ?? $array, $owner . ' initializer must be a positional array without holes, unpacking, or references');
+            }
+
+            $isNested = $item->value instanceof Expr\Array_;
+            if ($nested !== null && $nested !== $isNested) {
+                $this->fatalError($item->value, $owner . ' initializer must have a uniform rectangular shape');
+            }
+            $nested = $isNested;
+            if ($isNested) {
+                $child = $this->inferStdArrayInitializer($item->value, $owner);
+                if ($childDimensions !== null && $childDimensions !== $child['dimensions']) {
+                    $this->fatalError($item->value, $owner . ' initializer must have a uniform rectangular shape');
+                }
+                $childDimensions = $child['dimensions'];
+                $actualLeafInfo = ['type' => $child['type'], 'class' => $child['class']];
+                foreach ($child['entries'] as $entry) {
+                    array_unshift($entry['path'], $index);
+                    $entries[] = $entry;
+                }
+            } else {
+                $actualLeafInfo = $this->inferStdInitializerValueType($item->value, $owner);
+                $entries[] = ['path' => [$index], 'value' => $item->value];
+            }
+            if ($leafInfo === null) {
+                $leafInfo = $actualLeafInfo;
+            } else {
+                $this->assertSameStdInitializerValueType($leafInfo, $actualLeafInfo, $item->value, $owner);
+            }
+        }
+
+        return [
+            'type' => $leafInfo['type'],
+            'class' => $leafInfo['class'],
+            'dimensions' => [count($array->items), ...($childDimensions ?? [])],
+            'entries' => $entries,
+        ];
+    }
+
     protected function parseStdContainerOffsetUnset(Expr\ArrayDimFetch $expr): string
     {
         if ($expr->dim === null) {
@@ -933,7 +1115,11 @@ trait StdContainerTrait
 
     protected function convertStdValueExpr(array $info, NodeAbstract $expr): string
     {
-        $valueExpr = $this->parseExpr($expr);
+        return $this->convertParsedStdValueExpr($info, $expr, $this->parseExpr($expr));
+    }
+
+    protected function convertParsedStdValueExpr(array $info, NodeAbstract $expr, string $valueExpr): string
+    {
         $class = $info['class'] ?? null;
         if ($class === null) {
             $targetType = $info['type'];
@@ -964,6 +1150,66 @@ trait StdContainerTrait
         }
 
         return 'php::toObject(' . $valueExpr . ', ' . $this->getClassEntryPtr($class) . ')';
+    }
+
+    protected function parseOrderedStdInitializerValue(array $info, NodeAbstract $expr): string
+    {
+        $value = $this->materializeRefReturnAsValue(
+            $expr,
+            $this->parseOrderedOperand($expr, false),
+        );
+        return $this->convertParsedStdValueExpr($info, $expr, $value);
+    }
+
+    /** @param list<string> $statements */
+    private function genStdValueInitializerExpression(string $var, array $statements): string
+    {
+        $code = '[&]() -> php::Var {' . PHP_EOL;
+        $this->indentLevel++;
+        foreach ($statements as $statement) {
+            $code .= $this->getIndent() . $statement . ';' . PHP_EOL;
+        }
+        $code .= $this->getIndent() . 'return ' . $var . ';' . PHP_EOL;
+        $this->indentLevel--;
+        return $code . $this->getIndent() . '}()';
+    }
+
+    private function genStdArrayValueInitializer(string $var, array $info, array $entries): string
+    {
+        $statements = [];
+        foreach ($entries as $entry) {
+            $path = $entry['path'];
+            $last = array_pop($path);
+            $target = $var . '_ref';
+            foreach ($path as $index) {
+                $target .= '.offsetGet(' . $index . ')';
+            }
+            $value = $this->parseOrderedStdInitializerValue($info, $entry['value']);
+            $statements[] = $target . '.offsetSet(' . $last . ', ' . $value . ')';
+        }
+        return $this->genStdValueInitializerExpression($var, $statements);
+    }
+
+    private function genStdVectorValueInitializer(string $var, array $info, array $items): string
+    {
+        $statements = [];
+        foreach ($items as $item) {
+            $statements[] = $var . '_ref.push_back('
+                . $this->parseOrderedStdInitializerValue($info, $item->value) . ')';
+        }
+        return $this->genStdValueInitializerExpression($var, $statements);
+    }
+
+    private function genStdMapValueInitializer(string $var, array $info, array $items): string
+    {
+        $statements = [];
+        foreach ($items as $item) {
+            $key = $this->parseOrderedOperand($item->key, false);
+            $key = $this->convertStdContainerKey($info, $key);
+            $value = $this->parseOrderedStdInitializerValue($info, $item->value);
+            $statements[] = $var . '_ref.offsetSet(' . $key . ', ' . $value . ')';
+        }
+        return $this->genStdValueInitializerExpression($var, $statements);
     }
 
     protected function convertStdVarBackedExpr(string $targetType, string $valueExpr, NodeAbstract $expr): string
@@ -1060,6 +1306,25 @@ trait StdContainerTrait
 
     protected function parseStdArray(string $var, Expr\StaticCall $expr): string
     {
+        $initializer = $this->getStdValueInitializer($expr);
+        if ($initializer !== null) {
+            $inferred = $this->inferStdArrayInitializer($initializer);
+            $type = $inferred['type'];
+            $dimensions = $inferred['dimensions'];
+            $totalElements = array_product($dimensions);
+            $info = [
+                'kind' => 'array',
+                'decl' => $this->getStdArrayDecl($type, $dimensions, $inferred['class']),
+                'type' => $type,
+                'class' => $inferred['class'],
+                'sizes' => array_reverse($dimensions),
+                'dimensions' => $dimensions,
+                'bytes' => $totalElements * $this->getStdValueTypeBytes($type),
+            ];
+            $this->context->stdArrays[$var] = $this->addStdTypeId($info);
+            return $this->genStdArrayValueInitializer($var, $info, $inferred['entries']);
+        }
+
         $tmp = $expr;
         $nesting = [];
         $totalBytes = 0;
@@ -1107,6 +1372,22 @@ trait StdContainerTrait
 
     protected function parseStdVector(string $var, Expr\StaticCall $expr): string
     {
+        $initializer = $this->getStdValueInitializer($expr);
+        if ($initializer !== null) {
+            $inferred = $this->inferStdFlatInitializer($initializer, 'std::vector', 'positional');
+            $decl = Type::STD_VECTOR . '<'
+                . $this->getStdContainerElementType($inferred['type'], $inferred['class']) . '>';
+            $info = [
+                'kind' => 'vector',
+                'decl' => $decl,
+                'type' => $inferred['type'],
+                'class' => $inferred['class'],
+                'size' => null,
+            ];
+            $this->context->stdContainers[$var] = $this->addStdTypeId($info);
+            return $this->genStdVectorValueInitializer($var, $info, $inferred['items']);
+        }
+
         if (count($expr->args) < 1 || count($expr->args) > 2) {
             $this->fatalError($expr, 'std::vector() expects one or two arguments');
         }
@@ -1143,6 +1424,26 @@ trait StdContainerTrait
 
     private function parseStdMapBase(string $var, Expr\StaticCall $expr, string $funcName, string $containerType, string $kind): string
     {
+        $initializer = $this->getStdValueInitializer($expr);
+        if ($initializer !== null) {
+            $inferred = $this->inferStdFlatInitializer($initializer, $funcName, 'map');
+            $decl = $this->getStdMapDecl(
+                $containerType,
+                $inferred['keyType'],
+                $inferred['type'],
+                $inferred['class'],
+            );
+            $info = [
+                'kind' => $kind,
+                'decl' => $decl,
+                'type' => $inferred['type'],
+                'class' => $inferred['class'],
+                'keyType' => $inferred['keyType'],
+            ];
+            $this->context->stdContainers[$var] = $this->addStdTypeId($info);
+            return $this->genStdMapValueInitializer($var, $info, $inferred['items']);
+        }
+
         if (count($expr->args) !== 2) {
             $this->fatalError($expr, $funcName . '() expects two arguments');
         }

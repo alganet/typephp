@@ -69,6 +69,39 @@ trait TypedArrayTrait
         return ['kind' => $kind, 'keyType' => $key, 'type' => $value['type'], 'class' => $value['class']];
     }
 
+    protected function parseTypedArrayFactoryDefinition(string $kind, Expr\StaticCall $call): array
+    {
+        $initializer = $this->getStdValueInitializer($call);
+        if ($initializer === null) {
+            return $this->parseTypedArrayDefinition($kind, $call->args, $call);
+        }
+
+        $inferred = $this->inferStdFlatInitializer(
+            $initializer,
+            'std::' . $kind,
+            $kind === 'list' ? 'integer' : 'map',
+        );
+        if (!in_array($inferred['type'], [
+            Type::INT,
+            Type::FLOAT,
+            Type::BOOL,
+            Type::STR,
+            Type::ARRAY,
+            Type::OBJECT,
+        ], true)) {
+            $this->fatalError($call, 'Typed PHP array value initialization only supports concrete PHP value types');
+        }
+        if ($this->isNativeObjectClass($inferred['class'] ?? '')) {
+            $this->fatalError($call, 'Typed PHP arrays cannot hold Native objects');
+        }
+        return [
+            'kind' => $kind,
+            'keyType' => $kind === 'list' ? Type::INT : $inferred['keyType'],
+            'type' => $inferred['type'],
+            'class' => $inferred['class'],
+        ];
+    }
+
     protected function parseTypedArrayParameterDefinition(Node\Param $param): ?array
     {
         foreach (['StdList' => 'list', 'StdDict' => 'dict'] as $name => $kind) {
@@ -96,7 +129,7 @@ trait TypedArrayTrait
         if ($expr instanceof Expr\StaticCall && $expr->class instanceof Node\Name
             && $expr->name instanceof Node\Identifier && $this->isStdClassExpr($expr->class)
             && in_array(strtolower($expr->name->name), ['list', 'dict'], true)) {
-            return $this->parseTypedArrayDefinition(strtolower($expr->name->name), $expr->args, $expr);
+            return $this->parseTypedArrayFactoryDefinition(strtolower($expr->name->name), $expr);
         }
         if ($this->isVarExpr($expr)) {
             return $this->context->typedArrays[$this->parseIdentifier($expr)] ?? null;
@@ -137,7 +170,7 @@ trait TypedArrayTrait
             && $right->name instanceof Node\Identifier && $this->isStdClassExpr($right->class)
             && in_array(strtolower($right->name->name), ['list', 'dict'], true);
         $definition = $factory
-            ? $this->parseTypedArrayDefinition(strtolower($right->name->name), $right->args, $right)
+            ? $this->parseTypedArrayFactoryDefinition(strtolower($right->name->name), $right)
             : $this->getTypedArrayDefinition($right);
         $existing = $this->context->typedArrays[$name] ?? null;
         if ($definition === null && $existing === null) {
@@ -165,7 +198,11 @@ trait TypedArrayTrait
             $this->addLocalVar($name, Type::ARRAY);
             $this->context->typedArrays[$name] = $definition;
         }
-        return $name . ' = ' . ($factory ? 'php::Array{}' : $this->parseExprAsValue($right));
+        if ($factory) {
+            $initializer = $this->getStdValueInitializer($right);
+            return $name . ' = ' . ($initializer === null ? 'php::Array{}' : $this->parseArray($initializer));
+        }
+        return $name . ' = ' . $this->parseExprAsValue($right);
     }
 
     protected function guardTypedArrayValue(array $def, Expr $expr, string $code, bool $key = false): string

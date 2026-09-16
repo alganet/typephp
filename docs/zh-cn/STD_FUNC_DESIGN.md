@@ -1,6 +1,6 @@
 # StdFunc / StdArgInfo 类型注解设计
 
-状态：`StdFunc` / `StdArgInfo` 方案尚未实现；其中引用的 StdArray 类型注解已经实现。统一术语及容器类型见 [类型注解统一设计](TYPE_ANNOTATIONS.md)。
+状态：`StdFunc` / `StdArgInfo` 方案已暂缓，不进入当前实现计划；本文仅保留历史设计记录。其中引用的 StdArray 类型注解已经实现。统一术语及容器类型见 [类型注解统一设计](TYPE_ANNOTATIONS.md)。
 
 ## 目标与非目标
 

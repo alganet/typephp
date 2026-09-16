@@ -1,6 +1,6 @@
 # Unified Type Annotation Design
 
-Status: a combined record of existing container behavior and target design. The `StdArray` annotation is implemented; `StdFunc` and `StdArgInfo` are not.
+Status: a combined record of existing container behavior and target design. The `StdArray` annotation is implemented; `StdFunc` and `StdArgInfo` are deferred.
 
 ## Terminology and responsibilities
 
@@ -26,6 +26,8 @@ See [StdFunc and StdArgInfo](STD_FUNC_DESIGN.md), [typed PHP arrays](TYPED_ARRAY
 | `StdFunc(R, args)` | Existing function or closure value | Proposed signature-bearing callable | Parameters, result, references, and omission rules |
 
 Both the `std::array` container and its `StdArray` annotation are implemented. The annotation declares parameter/property contracts; it does not create values.
+
+Every value factory also accepts one non-empty PHP array initializer: `std::array($values)`, `std::vector($values)`, `std::map($values)`, `std::orderedMap($values)`, `std::list($values)`, and `std::dict($values)`. The compiler infers the contract from arbitrary key/value expressions whose static types are known. Types must match exactly; keys must be definite Int or Str values, and a var/any/mixed key or value is rejected. StdArray additionally infers and validates a rectangular shape. Empty arrays must use an explicit-type factory.
 
 Similar type arguments do not make storage models interchangeable. A Box is not a PHP array, and annotations do not change PHP's native type system.
 

@@ -5,6 +5,8 @@ This document records current implementation boundaries. See [Unified Type Annot
 `std::list(T)` and `std::dict(K, V)` retain PHP array storage and copy-on-write.
 Type annotations declare their key and value contracts on parameters and properties:
 
+Local values may also infer their types from non-empty initializers, for example `std::list([9, 3, 5])` and `std::dict(['v1' => 999, 'v2' => 1000])`. Entries may contain arbitrary expressions, but every static value type must match exactly, and explicit dict keys must all have the same Int or Str type. Any var/any/mixed key or value is a compile error because it cannot provide a trustworthy inferred contract.
+
 ```php
 class State
 {

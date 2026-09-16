@@ -1,6 +1,6 @@
 # 类型注解统一设计
 
-状态：现有容器实现与目标设计的统一记录；`StdArray` 类型注解已经实现，`StdFunc` / `StdArgInfo` 尚未实现。
+状态：现有容器实现与目标设计的统一记录；`StdArray` 类型注解已经实现，`StdFunc` / `StdArgInfo` 已暂缓。
 
 ## 术语与职责
 
@@ -26,6 +26,8 @@
 | `StdFunc(R, args)` | 已有函数或闭包值 | 拟议的带签名 callable | 参数、返回值、引用与缺省调用规则 |
 
 `std::array` 和 `StdArray` 类型注解均已实现。后者声明参数或属性契约，不创建容器值。
+
+所有创建值的工厂还支持单个非空 PHP array 初始化参数：`std::array($values)`、`std::vector($values)`、`std::map($values)`、`std::orderedMap($values)`、`std::list($values)`、`std::dict($values)`。编译器从任意可静态定型的 key/value 表达式推导契约；类型必须完全一致，key 只能是确定的 Int 或 Str，key/value 为 var/any/mixed 时拒绝。StdArray 另外推导并验证矩形维度；空数组必须改用显式类型工厂。
 
 不同存储模型不能因为类型参数相似就互换。Box 不等于 PHP array；类型注解也不改变 PHP 原生类型系统。
 

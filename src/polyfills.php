@@ -247,32 +247,32 @@ class std
         return (bool) $condition;
     }
 
-    public static function array(mixed $type, int $size): array
+    public static function array(mixed $typeOrValues, ?int $size = null): array
     {
         return [];
     }
 
-    public static function orderedMap(mixed $key_type, mixed $value_type): array
+    public static function orderedMap(mixed $keyTypeOrValues, mixed $valueType = null): array
     {
         return [];
     }
 
-    public static function map(mixed $key_type, mixed $value_type): array
+    public static function map(mixed $keyTypeOrValues, mixed $valueType = null): array
     {
         return [];
     }
 
-    public static function vector(mixed $value_type, ?int $size = null): array
+    public static function vector(mixed $valueTypeOrValues, ?int $size = null): array
     {
         return [];
     }
 
-    public static function list(mixed $valueType): array
+    public static function list(mixed $valueTypeOrValues): array
     {
         return [];
     }
 
-    public static function dict(mixed $keyType, mixed $valueType): array
+    public static function dict(mixed $keyTypeOrValues, mixed $valueType = null): array
     {
         return [];
     }
