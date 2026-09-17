@@ -1621,7 +1621,7 @@ class CompilerBase implements PropertyAccessContext
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'method call cache ID allocation');
         $id = $this->getStableCallSiteId('method-call');
         $this->methodCallCacheIndex = max($this->methodCallCacheIndex, $id + 1);
-        return 'typephp_get_method_call_cache(MethodCallCacheId{' . $id . '})';
+        return 'get_method_call_cache(MethodCallCacheId{' . $id . '})';
     }
 
     protected function getFunctionCallCache(): string
@@ -1629,7 +1629,7 @@ class CompilerBase implements PropertyAccessContext
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'function call cache ID allocation');
         $id = $this->getStableCallSiteId('function-call');
         $this->functionCallCacheIndex = max($this->functionCallCacheIndex, $id + 1);
-        return 'typephp_get_function_call_cache(FunctionCallCacheId{' . $id . '})';
+        return 'get_function_call_cache(FunctionCallCacheId{' . $id . '})';
     }
 
     /** Reserve a request-local namespace-function resolution slot per call site. */
@@ -1638,7 +1638,7 @@ class CompilerBase implements PropertyAccessContext
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'function resolution cache ID allocation');
         $id = $this->getStableCallSiteId('function-resolution');
         $this->functionResolutionCacheIndex = max($this->functionResolutionCacheIndex, $id + 1);
-        return 'typephp_get_function_resolution_cache(FunctionResolutionCacheId{' . $id . '})';
+        return 'get_function_resolution_cache(FunctionResolutionCacheId{' . $id . '})';
     }
 
     protected function getStableCallSiteId(string $domain): int

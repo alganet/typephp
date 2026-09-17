@@ -65,6 +65,7 @@ PHP);
         $providerHeader = $compiler->getDeclarationHeaderFile($this->provider);
         $consumerHeader = $compiler->getDeclarationHeaderFile($this->consumer);
         $consumerCpp = $this->invoke($compiler, 'getCppFile', $this->consumer);
+        $providerCpp = $this->invoke($compiler, 'getCppFile', $this->provider);
 
         self::assertFileExists($providerHeader);
         self::assertFileExists($consumerHeader);
@@ -84,9 +85,11 @@ PHP);
         );
         self::assertStringContainsString('php_incremental__answer(', $providerDeclarations);
         self::assertStringContainsString('_const_var_Incremental__LIMIT', $providerDeclarations);
-        self::assertStringContainsString('_global_var_shared', $providerDeclarations);
+        self::assertStringNotContainsString('_global_var_shared', $providerDeclarations);
+        self::assertStringContainsString('extern THREAD_LOCAL php::Var _global_var_shared;', file_get_contents($providerCpp));
         self::assertStringNotContainsString('_global_var_shared', $consumerDeclarations);
         self::assertStringNotContainsString('_global_var_shared', $runtimeDeclarations);
+        self::assertStringContainsString('extern THREAD_LOCAL php::Var _global_var_shared;', $consumerCode);
         self::assertStringNotContainsString('php_main(', $providerDeclarations);
         self::assertStringContainsString('php_main(', $consumerDeclarations);
         self::assertStringContainsString(
@@ -117,6 +120,42 @@ PHP);
         $symbols = $this->property($compiler, 'symbolDeclInFile');
         self::assertSame($this->provider, $symbols['function:incremental\\answer']);
         self::assertSame($this->provider, $symbols['constant:Incremental\\LIMIT']);
+    }
+
+    public function testSuperglobalsAreDeclaredInEachUsingSource(): void
+    {
+        file_put_contents($this->provider, <<<'PHP'
+<?php
+function readGlobals(): array
+{
+    return [$_GET, $_POST, $_COOKIE, $_SERVER, $_FILES, $_SESSION, $_REQUEST, $_ENV, $GLOBALS];
+}
+PHP);
+        file_put_contents($this->consumer, "<?php\nfunction main(): void {}\n");
+
+        foreach ([1, 2] as $_) {
+            $compiler = $this->convertProject();
+            $runtimeHeader = $this->buildDirectory . '/include/php_incremental_runtime_decl.h';
+            $providerCpp = $this->invoke($compiler, 'getCppFile', $this->provider);
+            $consumerCpp = $this->invoke($compiler, 'getCppFile', $this->consumer);
+
+            $declarations = (string) file_get_contents($providerCpp);
+            foreach (['_GET', '_POST', '_COOKIE', '_SERVER', '_FILES', '_SESSION', '_REQUEST', '_ENV', 'GLOBALS'] as $name) {
+                self::assertStringContainsString(
+                    'extern THREAD_LOCAL php::Var _global_var_' . $name . ';',
+                    $declarations,
+                );
+            }
+            self::assertStringNotContainsString('_global_var_', (string) file_get_contents($runtimeHeader));
+            self::assertStringContainsString(
+                'extern THREAD_LOCAL php::Var _global_var__SERVER;',
+                (string) file_get_contents($consumerCpp),
+            );
+            self::assertStringContainsString(
+                'php::Var &_SERVER = _global_var__SERVER;',
+                (string) file_get_contents($consumerCpp),
+            );
+        }
     }
 
     public function testStdContainerParameterContractsSurviveWarmConversionAndInvalidateCallers(): void

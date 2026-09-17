@@ -974,7 +974,11 @@ class Translator extends Preprocessor
         $this->writeFile($file, $this->renderDataDeclarations());
     }
 
-    protected function renderDataDeclarations(?string $sourceFile = null, bool $commonOnly = false): string
+    protected function renderDataDeclarations(
+        ?string $sourceFile = null,
+        bool $commonOnly = false,
+        bool $includeGlobals = true,
+    ): string
     {
         $includeCommon = $sourceFile === null;
         $projectNamespace = $this->getProjectNamespace();
@@ -986,7 +990,7 @@ class Translator extends Preprocessor
 
         // Embedded binaries populate the CLI script fields in $_SERVER at
         // request startup, even when the source does not reference $_SERVER.
-        if ($includeCommon
+        if ($includeGlobals && $includeCommon
             && !$this->isNanoMode()
             && $this->isBuildModeBin()
             && !$this->hasGlobalVar('_SERVER')) {
@@ -994,7 +998,7 @@ class Translator extends Preprocessor
             $this->globalVars['_SERVER'] = Type::ARRAY;
         }
 
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($includeGlobals ? $this->globalVars : [] as $name => $type) {
             if ($sourceFile !== null
                 && ($this->globalVarDeclInFile[$name] ?? null) !== $sourceFile) {
                 continue;
@@ -1007,7 +1011,7 @@ class Translator extends Preprocessor
                 : Type::VAR;
             $lines[] = 'extern THREAD_LOCAL ' . $cppType . ' ' . $this->escapeGlobalVar($name) . ';';
         }
-        foreach ($this->nativeStaticInitializers as $name => $_) {
+        foreach ($includeGlobals ? $this->nativeStaticInitializers : [] as $name => $_) {
             if ($sourceFile !== null
                 && ($this->nativeStaticInitializerDeclInFile[$name] ?? null) !== $sourceFile) {
                 continue;
@@ -1056,9 +1060,9 @@ class Translator extends Preprocessor
             $lines[] = 'zend_function *get_persistent_method(PersistentFuncId func_id, const php::Str &method_name, PersistentClassId class_id, const php::Str &class_name);';
             $lines[] = 'uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_name, const php::Str &class_name);' . PHP_EOL;
             $lines[] = 'php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) noexcept;' . PHP_EOL;
-            $lines[] = 'php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id) noexcept;' . PHP_EOL;
-            $lines[] = 'php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id) noexcept;' . PHP_EOL;
-            $lines[] = 'uint8_t &typephp_get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'php::MethodCallCacheSlot &get_method_call_cache(MethodCallCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'php::FunctionCallCacheSlot &get_function_call_cache(FunctionCallCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'uint8_t &get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept;' . PHP_EOL;
         }
 
         if (!$commonOnly) {
@@ -1363,15 +1367,15 @@ php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) noexcept {
     return php_request_cache->property_cache_map[static_cast<uint32_t>(cache_id)];
 }
 
-php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id) noexcept {
+php::MethodCallCacheSlot &get_method_call_cache(MethodCallCacheId cache_id) noexcept {
     return php_request_cache->method_call_cache_map[static_cast<uint32_t>(cache_id)];
 }
 
-php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id) noexcept {
+php::FunctionCallCacheSlot &get_function_call_cache(FunctionCallCacheId cache_id) noexcept {
     return php_request_cache->function_call_cache_map[static_cast<uint32_t>(cache_id)];
 }
 
-uint8_t &typephp_get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept {
+uint8_t &get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept {
     return php_request_cache->function_resolution_cache_map[static_cast<uint32_t>(cache_id)];
 }
 CODE;
@@ -2848,14 +2852,14 @@ CODE;
 
         $runtimeHeader = $this->getIncludeDir() . '/' . $this->getRuntimeDeclarationHeaderName();
         $this->writeFile($runtimeHeader, '#pragma once' . PHP_EOL . PHP_EOL
-            . $this->renderDataDeclarations(null, true)
+            . $this->renderDataDeclarations(null, true, false)
             . $this->genNativeObjectForwardDeclarations());
         foreach ($this->declarationHeaderFiles as $file => $header) {
             if (!$this->shouldRegeneratePhpFile($file)) {
                 continue;
             }
             $code = $this->renderFunctionDeclarations($file);
-            $code .= $this->renderDataDeclarations($file);
+            $code .= $this->renderDataDeclarations($file, false, false);
             $this->writeFile(
                 $this->getIncludeDir() . '/' . $header,
                 $code,
@@ -3054,7 +3058,27 @@ CODE;
             ...$globalHeaders,
             ...$declarationHeaders,
             ...$this->localHeaders,
-        ]);
+        ]) . $this->renderGlobalDeclarationsForSource($this->file);
+    }
+
+    private function renderGlobalDeclarationsForSource(string $sourceFile): string
+    {
+        $lines = [];
+        foreach ($this->globalVarsInFile[$sourceFile] ?? [] as $name => $_) {
+            $cppType = isset($this->nativeGlobalObjects[$name])
+                ? $this->getNativeObjectPointerType($this->nativeGlobalObjects[$name])
+                : Type::VAR;
+            $lines[] = 'extern THREAD_LOCAL ' . $cppType . ' ' . $this->escapeGlobalVar($name) . ';';
+        }
+        foreach ($this->nativeStaticInitializersInFile[$sourceFile] ?? [] as $name => $_) {
+            $lines[] = 'extern THREAD_LOCAL bool ' . $this->escapeGlobalVar($name) . ';';
+        }
+        if ($lines === []) {
+            return '';
+        }
+        sort($lines, SORT_STRING);
+        return PHP_EOL . 'namespace ' . $this->getProjectNamespace() . ' {' . PHP_EOL
+            . implode(PHP_EOL, $lines) . PHP_EOL . '}' . PHP_EOL;
     }
 
     /**
@@ -3062,8 +3086,8 @@ CODE;
      * does not call every compiled php_* function. Pulling every per-source
      * declaration into this translation unit made an unrelated declaration
      * change invalidate the large extension object and greatly increased C++
-     * parsing work. Project-wide runtime storage is declared by runtime_decl;
-     * the generated arginfo headers provide the Zend-facing symbols themselves.
+     * parsing work. Project sources declare the global storage they use in
+     * their own translation units; arginfo headers provide Zend-facing symbols.
      */
     private function genExtensionIncludeHeaderFiles(): string
     {
@@ -3573,7 +3597,8 @@ CODE;
             }
 
             $lifecycleSource = $this->getClassArrayConstantLifecycleSourceFile($sourceFile);
-            $code = $this->renderIncludeHeaderFiles($headers) . PHP_EOL;
+            $code = $this->renderIncludeHeaderFiles($headers)
+                . $this->renderGlobalDeclarationsForSource($sourceFile) . PHP_EOL;
             $code .= 'namespace ' . $this->getProjectNamespace() . ' {' . PHP_EOL . PHP_EOL;
             $code .= implode('', $sourceDefinitions);
             $code .= '}  // namespace ' . $this->getProjectNamespace() . PHP_EOL;
@@ -5966,6 +5991,12 @@ CODE;
 
     private function registerServerEnvironment(string $entryFile): string
     {
+        if (!$this->hasGlobalVar('_SERVER')) {
+            $this->addGlobalVar('_SERVER', Type::ARRAY);
+        } else {
+            $this->recordGlobalVarUsage('_SERVER');
+        }
+
         /**
          * For long-running (resident) applications, control enters a long-lived
          * event loop immediately after the current logic finishes. These
