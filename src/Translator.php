@@ -986,7 +986,6 @@ class Translator extends Preprocessor
         $lines[] = '#include <typephp_helper.h>';
         $lines[] = PHP_EOL;
         $lines[] = 'namespace ' . $projectNamespace . ' {';
-        $lines[] = PHP_EOL;
 
         // Embedded binaries populate the CLI script fields in $_SERVER at
         // request startup, even when the source does not reference $_SERVER.
@@ -1022,11 +1021,6 @@ class Translator extends Preprocessor
             $lines[] = 'extern THREAD_LOCAL bool ' . $this->escapeGlobalVar($name) . ';';
         }
 
-        if ($includeCommon && $this->literalStrings) {
-            $lines[] = 'ZEND_ATTRIBUTE_CONST ' . Type::STR . ' &'
-                . self::LITERAL_STRING_GETTER . '(uint32_t index) noexcept;' . PHP_EOL;
-        }
-
         if (!$commonOnly) {
             foreach ($this->constants as $name => $constant) {
                 if ($sourceFile !== null && ($constant->sourceFile ?? '') !== $sourceFile) {
@@ -1047,10 +1041,10 @@ class Translator extends Preprocessor
             $lines[] = 'enum class RequestFuncId : uint32_t {};';
             $lines[] = 'enum class PersistentFuncId : uint32_t {};';
             $lines[] = 'enum class PersistentPropertyId : uint32_t {};';
-            $lines[] = 'enum class PropertyCacheId : uint32_t {};' . PHP_EOL;
-            $lines[] = 'enum class MethodCallCacheId : uint32_t {};' . PHP_EOL;
-            $lines[] = 'enum class FunctionCallCacheId : uint32_t {};' . PHP_EOL;
-            $lines[] = 'enum class FunctionResolutionCacheId : uint32_t {};' . PHP_EOL;
+            $lines[] = 'enum class PropertyCacheId : uint32_t {};';
+            $lines[] = 'enum class MethodCallCacheId : uint32_t {};';
+            $lines[] = 'enum class FunctionCallCacheId : uint32_t {};';
+            $lines[] = 'enum class FunctionResolutionCacheId : uint32_t {};';
 
             $lines[] = 'zend_class_entry *get_class(RequestClassId class_id, const php::Str &class_name);';
             $lines[] = 'zend_function *get_func(RequestFuncId func_id, const php::Str &func_name);';
@@ -1058,11 +1052,16 @@ class Translator extends Preprocessor
             $lines[] = 'zend_class_entry *get_persistent_class(PersistentClassId class_id, const php::Str &class_name);';
             $lines[] = 'zend_function *get_persistent_func(PersistentFuncId func_id, const php::Str &func_name);';
             $lines[] = 'zend_function *get_persistent_method(PersistentFuncId func_id, const php::Str &method_name, PersistentClassId class_id, const php::Str &class_name);';
-            $lines[] = 'uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_name, const php::Str &class_name);' . PHP_EOL;
-            $lines[] = 'php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) noexcept;' . PHP_EOL;
-            $lines[] = 'php::MethodCallCacheSlot &get_method_call_cache(MethodCallCacheId cache_id) noexcept;' . PHP_EOL;
-            $lines[] = 'php::FunctionCallCacheSlot &get_function_call_cache(FunctionCallCacheId cache_id) noexcept;' . PHP_EOL;
-            $lines[] = 'uint8_t &get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_name, const php::Str &class_name);';
+            $lines[] = 'php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) noexcept;';
+            $lines[] = 'php::MethodCallCacheSlot &get_method_call_cache(MethodCallCacheId cache_id) noexcept;';
+            $lines[] = 'php::FunctionCallCacheSlot &get_function_call_cache(FunctionCallCacheId cache_id) noexcept;';
+            $lines[] = 'uint8_t &get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept;';
+        }
+
+        if ($includeCommon && $this->literalStrings) {
+            $lines[] = 'ZEND_ATTRIBUTE_CONST ' . Type::STR . ' &'
+                . self::LITERAL_STRING_GETTER . '(uint32_t index) noexcept;';
         }
 
         if (!$commonOnly) {
