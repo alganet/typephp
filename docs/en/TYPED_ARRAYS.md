@@ -24,6 +24,12 @@ PHP types may be omitted or declared as compatible storage types: `array` for
 `StdList` / `StdDict`, and `box` for `StdVector` / `StdMap` / `StdOrderedMap`.
 Explicit `mixed`, `any`, nullable types, unions, and incompatible types are rejected.
 
+`$source->toStdList(Type::Int)` and `$source->toStdDict(Type::Str, Type::Int)` convert values into new local typed arrays. A typed array with the same contract uses ordinary PHP array assignment. An ordinary array has every key and value checked strictly at runtime; other values first pass through `toArray()` and then receive the same checks. `ClassName::class` is accepted as a value type and checks that every value is an instance of that class. Conversion leaves the source array unchanged.
+
+**Performance:** Except for direct assignment from a typed array with the same contract, conversion traverses the entire array and checks every key and value, taking O(n) time. Non-array sources also run `toArray()` first. Repeated conversion of large arrays, especially inside loops, can be costly. Use these methods carefully; convert once at the typed boundary and reuse the result when possible.
+
+Validation uses the array's actual runtime key types. PHP normalizes numeric string keys such as `'123'` to integer keys, so an ordinary array with such a key fails the strict `toStdDict(Type::Str, ...)` check. A `StdDict` with the same contract is assigned directly and is not checked again.
+
 List keys are integers, including negative and sparse keys; no bounds checks
 are inserted. Only lists allow `[]` append. Dicts require an explicit int or
 string key. Dynamic `any` / `var` keys get internal strict type checks, not coercion.

@@ -93,7 +93,7 @@ Parameter entry validates the Box, container kind, leaf type, and full shape bef
 
 ## StdList / StdDict keys and values
 
-Typed PHP arrays primarily establish their constraints statically. They introduce no runtime typed-array object and require no PHPX or HashTable changes.
+Typed PHP arrays primarily establish their constraints statically. They introduce no runtime typed-array object and do not change PHP HashTable storage. Explicit `toStdList()` / `toStdDict()` conversion uses PHPX `toTypedArray()` to check each entry of the source array.
 
 - A list is an integer-key PHP array, allowing negative keys, sparse keys, and holes. It permits append.
 - A dict declares Int or Str keys and requires explicit keys, even for integer-key dicts.

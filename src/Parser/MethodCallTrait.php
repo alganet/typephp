@@ -610,6 +610,10 @@ trait MethodCallTrait
         if ($this->containsNullsafeChain($expr->var)) {
             return $this->parseNullsafeExpr($expr);
         }
+        if ($this->isNamedMethod($expr->name)
+            && in_array($expr->name->toString(), ['toStdList', 'toStdDict'], true)) {
+            return $this->parseTypedArrayConversionCall($expr);
+        }
 
         $class = '';
         $materializedNativeReceiver = false;
@@ -1200,7 +1204,12 @@ trait MethodCallTrait
 
         $calledCe = $this->getCalledCeExpr();
         $direct = 'php::Var(' . self::PREFIX . $nativeFunc . '(this_))';
-        $fallback = 'php::call(' . $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . '))';
+        // Keep the receiver and qualify the runtime class: a child private
+        // method must not resolve as the parent's lexical private method.
+        $fallback = ($this->methodDef->flags & Modifiers::STATIC)
+            ? 'php::call(' . $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . '))'
+            : 'php::callScoped(this_, php::concat({typephp_get_called_class(' . $calledCe . ')'
+                . ', "::", ' . $methodPtr . '}), ' . $this->getCallableScopeExpr() . ')';
         return '(EXPECTED(' . $calledCe . ' == ' . $this->getClassEntryPtr($class) . ')'
             . ' ? ' . $direct . ' : ' . $fallback . ')';
     }
@@ -1227,6 +1236,7 @@ trait MethodCallTrait
         $cacheCallable = false;
         $directStaticCall = false;
         $scopedStaticCall = false;
+        $scopedInstanceCall = false;
         $staticCallTarget = '';
         $staticCallMethod = '';
         $canUseDirectCallScope = $this->isNameExpr($expr->class) && $this->isIdExpr($expr->name);
@@ -1291,7 +1301,11 @@ trait MethodCallTrait
             }
             $fn = 'php::concat({' . $this->identifierToStr($expr->class) . ', "::", ' . $staticCallMethod . '})';
             $placeHolder = $fn;
-            if ($staticCallTarget !== '') {
+            if ($class === 'static' && $this->methodDef !== null
+                && !($this->methodDef->flags & Modifiers::STATIC)) {
+                $scopedInstanceCall = true;
+                $fn = 'php::concat({' . $this->getCalledClassExpr() . ', "::", ' . $staticCallMethod . '})';
+            } elseif ($staticCallTarget !== '') {
                 $directStaticCall = true;
             } else {
                 // `self::$method()` carries a lexical lookup class and a
@@ -1325,6 +1339,10 @@ trait MethodCallTrait
             // Used to resolve the method signature when detecting by-reference arguments (late static binding is resolved within the current class hierarchy)
             $rtFunc = $method;
             $rtClass = $this->getFullClassName();
+            if ($this->methodDef !== null && !($this->methodDef->flags & Modifiers::STATIC)) {
+                $scopedInstanceCall = true;
+                $fn = 'php::concat({' . $this->getCalledClassExpr() . ', "::", ' . $methodPtr . '})';
+            }
         } else {
             if ($class === 'self') {
                 $class = $this->getFullClassName();
@@ -1391,6 +1409,9 @@ trait MethodCallTrait
         }
 
         if (empty($expr->args)) {
+            if ($scopedInstanceCall) {
+                return 'php::callScoped(this_, ' . $fn . ', ' . $this->getCallableScopeExpr() . ')';
+            }
             if ($scopedStaticCall) {
                 return 'php::callScoped(' . $fn . ', ' . $this->getCallableScopeExpr() . ')';
             }
@@ -1403,6 +1424,10 @@ trait MethodCallTrait
             return 'php::call(' . $fn . ')';
         }
         try {
+            if ($scopedInstanceCall) {
+                return 'php::callScoped(this_, ' . $fn . ', ' . $this->getCallableScopeExpr() . ', '
+                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
+            }
             if ($scopedStaticCall) {
                 return 'php::callScoped(' . $fn . ', ' . $this->getCallableScopeExpr() . ', '
                     . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';

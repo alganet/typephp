@@ -126,6 +126,16 @@ trait TypedArrayTrait
         if ($expr instanceof Expr\Assign || $expr instanceof Expr\AssignRef) {
             return $this->getTypedArrayDefinition($expr->expr);
         }
+        if ($expr instanceof Expr\MethodCall && $expr->name instanceof Node\Identifier) {
+            $kind = match ($expr->name->name) {
+                'toStdList' => 'list',
+                'toStdDict' => 'dict',
+                default => null,
+            };
+            if ($kind !== null) {
+                return $this->parseTypedArrayDefinition($kind, $expr->args, $expr);
+            }
+        }
         if ($expr instanceof Expr\StaticCall && $expr->class instanceof Node\Name
             && $expr->name instanceof Node\Identifier && $this->isStdClassExpr($expr->class)
             && in_array(strtolower($expr->name->name), ['list', 'dict'], true)) {
@@ -135,6 +145,50 @@ trait TypedArrayTrait
             return $this->context->typedArrays[$this->parseIdentifier($expr)] ?? null;
         }
         return null;
+    }
+
+    protected function parseTypedArrayConversionCall(Expr\MethodCall $call): string
+    {
+        $kind = $call->name->toString() === 'toStdList' ? 'list' : 'dict';
+        $definition = $this->parseTypedArrayDefinition($kind, $call->args, $call);
+        if ($this->isVarExpr($call->var)) {
+            $this->assertStdContainerDoesNotEscapeNativeObjects($call, $this->parseIdentifier($call->var));
+        }
+        // A matching typed array already satisfies the contract. Preserve
+        // ordinary PHP array assignment and its copy-on-write behavior.
+        if ($this->getTypedArrayDefinition($call->var) === $definition) {
+            return $this->parseExprAsValue($call->var);
+        }
+
+        $stdContainer = $this->isVarExpr($call->var)
+            && $this->isStdContainer($this->parseIdentifier($call->var));
+        if ($this->detectTypeOfExpr($call->var) === Type::ARRAY && !$stdContainer) {
+            $source = $this->parseExprAsValue($call->var);
+        } else {
+            $class = $this->detectClassOfExpr($call->var);
+            if ($this->isNativeObjectClass($class)) {
+                // Native objects use their declared toArray() method; their
+                // pointer cannot be passed to PHPX's dynamic conversion.
+                $source = $this->parseExprAsValue(new Expr\MethodCall($call->var, new Node\Identifier('toArray')));
+            } else {
+                $source = 'php::toArray(' . $this->parseExprAsValue($call->var) . ')';
+            }
+        }
+        $valueType = match ($definition['type']) {
+            Type::INT => 'Int',
+            Type::FLOAT => 'Float',
+            Type::BOOL => 'Bool',
+            Type::STR => 'String',
+            Type::ARRAY => 'Array',
+            Type::OBJECT => 'Object',
+            Type::VAR => 'Any',
+        };
+        $valueClass = $definition['class'] !== null && $definition['class'] !== ''
+            ? $this->getClassEntryPtr($definition['class'])
+            : 'nullptr';
+        return 'php::toTypedArray(' . $source . ', '
+            . ($definition['keyType'] === Type::STR ? 'true' : 'false') . ', '
+            . 'php::TypedArrayValueType::' . $valueType . ', ' . $valueClass . ')';
     }
 
     protected function getTypedArrayAccessDefinition(NodeAbstract $expr): ?array

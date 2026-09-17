@@ -178,6 +178,8 @@ class CompilerBase implements PropertyAccessContext
         'toString'     => Type::STR,
         'toBool'       => Type::BOOL,
         'toArray'      => Type::ARRAY,
+        'toStdList'    => Type::ARRAY,
+        'toStdDict'    => Type::ARRAY,
         'toStream'     => Type::STREAM,
         'toBigInt'     => Type::BIGINT,
         'toBigFloat'   => Type::BIGFLOAT,
@@ -190,6 +192,8 @@ class CompilerBase implements PropertyAccessContext
     /** Keyword methods not listed here accept no arguments. */
     public const array KEYWORD_METHOD_WITH_ARGUMENTS = [
         'toObject' => true,
+        'toStdList' => true,
+        'toStdDict' => true,
     ];
 
     private const array STREAM_FUNCTIONS = [

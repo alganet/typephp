@@ -63,11 +63,11 @@ There are currently 17 `std::` compile-time entry points.
 | `std::list($valueType)` | Creates an integer-key typed PHP array with negative/sparse indices and append. | First assignment of a new function-local variable; strict dynamic keys, no dynamic reference mutation. |
 | `std::dict($keyType, $valueType)` | Creates a typed PHP dictionary with `Type::Int` or `Type::Str` keys. | First assignment of a new function-local variable; explicit keys required, no append. |
 
-Lists and dicts retain PHP array storage and copy-on-write without `toStd*()` recovery. Values require matching static types, while dynamic `any` / `var` keys receive internal strict checks. Only read-only dynamic PHP array calls are allowed, without `std::ref()`. Parameters need exactly matching `StdList` / `StdDict` type annotations, with the PHP type omitted or declared as `array`, never `mixed`; matching native `&` parameters can modify the caller's array. See [Typed PHP Arrays and Type Annotations](TYPED_ARRAYS.md) for examples and boundary details.
+Lists and dicts retain PHP array storage and copy-on-write. Values require matching static types, while dynamic `any` / `var` keys receive internal strict checks. Only read-only dynamic PHP array calls are allowed, without `std::ref()`. Parameters need exactly matching `StdList` / `StdDict` type annotations, with the PHP type omitted or declared as `array`, never `mixed`; matching native `&` parameters can modify the caller's array. See [Typed PHP Arrays and Type Annotations](TYPED_ARRAYS.md) for examples and boundary details.
 
 ## Std container conversion keyword methods
 
-There are currently 4 Std container conversion keyword methods.
+There are currently 6 Std container conversion keyword methods.
 
 | Name | Purpose | Main limitation |
 | --- | --- | --- |
@@ -75,6 +75,8 @@ There are currently 4 Std container conversion keyword methods.
 | `toStdVector(...)` | Wraps the variable as a std vector. | Can only be used in the top-level scope of the variable's first assignment. |
 | `toStdMap(...)` | Wraps the variable as a std map. | Can only be used in the top-level scope of the variable's first assignment. |
 | `toStdOrderedMap(...)` | Wraps the variable as a std ordered map. | Can only be used in the top-level scope of the variable's first assignment. |
+| `toStdList($valueType)` | Converts to an integer-key typed PHP array. | An identical contract copies directly; other sources receive strict key and value checks. |
+| `toStdDict($keyType, $valueType)` | Converts to a typed PHP dictionary. | Keys must be `Type::Int` or `Type::Str`; other rules match `toStdList()`. |
 
 ## Mechanisms not counted in this list
 

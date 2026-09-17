@@ -93,7 +93,7 @@ StdArray 参数入口校验 Box、容器种类、叶子类型和完整形状，�
 
 ## StdList / StdDict 的键和值
 
-强类型 PHP 数组的约束主要在静态阶段建立，不增加运行时强类型数组对象，也不修改 PHPX 或 PHP HashTable。
+强类型 PHP 数组的约束主要在静态阶段建立，不增加运行时强类型数组对象，也不修改 PHP HashTable。显式 `toStdList()` / `toStdDict()` 转换使用 PHPX 的 `toTypedArray()` 逐项校验来源数组。
 
 - list 是整数键 PHP 数组，允许负数、稀疏键和空洞，不是连续序列；支持 `[]` 追加。
 - dict 的键只能声明为 Int 或 Str，必须显式提供键，包括整数键 dict 也不允许追加。
