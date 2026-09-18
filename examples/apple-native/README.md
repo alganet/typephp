@@ -89,10 +89,10 @@ SDK:
 
 ```sh
 export PHPX_HOME=/path/to/swoole-cli/thirdparty/phpx
-php bin/tpc.php examples/objective-c-macos/ios.yml --no-progress
+php bin/tpc.php examples/apple-native/ios.yml --no-progress
 ```
 
-The compiler produces `examples/objective-c-macos/typephp_ios_hello`. Package
+The compiler produces `examples/apple-native/typephp_ios_hello`. Package
 and sign it with a development provisioning profile and identity installed in
 the login keychain:
 
@@ -101,7 +101,7 @@ export TYPEPHP_IOS_PROVISIONING_PROFILE=/path/to/profile.mobileprovision
 export TYPEPHP_IOS_CODE_SIGN_IDENTITY='Apple Development: Your Name (TEAMID)'
 # Set this when the profile uses a different identifier than the example.
 export TYPEPHP_IOS_BUNDLE_IDENTIFIER='your.provisioned.bundle.identifier'
-sh examples/objective-c-macos/package-ios-app.sh
+sh examples/apple-native/package-ios-app.sh
 ```
 
 The package includes iPhone icon sizes generated from the repository's
@@ -109,7 +109,7 @@ The package includes iPhone icon sizes generated from the repository's
 and run:
 
 ```sh
-sh examples/objective-c-macos/generate-ios-icons.sh
+sh examples/apple-native/generate-ios-icons.sh
 ```
 
 Find the connected iPhone and install the bundle:
@@ -118,8 +118,54 @@ Find the connected iPhone and install the bundle:
 xcrun devicectl list devices
 xcrun devicectl device install app \
     --device <device-id> \
-    'examples/objective-c-macos/dist/TypePHP iOS Hello.app'
+    'examples/apple-native/dist/TypePHP iOS Hello.app'
 ```
+
+## iOS Simulator (Apple silicon)
+
+The simulator needs archives compiled for `arm64-apple-ios-simulator`.
+The physical iPhone SDK above cannot be reused. Build the separate runtime
+and PHPX SDK on the Mac:
+
+```sh
+cd /path/to/swoole-cli
+php prepare.php @iphonesimulator-arm64 --with-parallel-jobs=8
+./make.sh all-library
+./make.sh config
+./make.sh libphp
+bash sapi/scripts/package-php-runtime-layer.sh iphonesimulator-arm64
+
+# Copy the packaged runtime's include/ and lib/ trees into this prefix.
+mkdir -p /path/to/phpx/ios/iphonesimulator-arm64
+cp -R runtime-layer/php-runtime-layer_*_iphonesimulator-arm64/include \
+      runtime-layer/php-runtime-layer_*_iphonesimulator-arm64/lib \
+      /path/to/phpx/ios/iphonesimulator-arm64/
+cp runtime-layer/php-runtime-layer_*_iphonesimulator-arm64/.typephp-php-runtime-abi \
+   /path/to/phpx/ios/iphonesimulator-arm64/
+cp var/iphonesimulator-arm64/deps/gmp/lib/libgmp.a \
+   var/iphonesimulator-arm64/deps/gmp/lib/libgmpxx.a \
+   var/iphonesimulator-arm64/deps/mpfr/lib/libmpfr.a \
+   /path/to/phpx/ios/iphonesimulator-arm64/lib/
+cd /path/to/phpx
+./ios/build.sh --platform simulator
+```
+
+Build and install the app with the simulator SDK:
+
+```sh
+cd /path/to/typephp
+export PHPX_HOME=/path/to/phpx
+sh examples/apple-native/build-ios.sh simulator
+xcrun simctl install booted 'examples/apple-native/dist/TypePHP iOS Simulator Hello.app'
+xcrun simctl launch booted org.swoole.typephp.ios-simulator-hello
+```
+
+The simulator bundle uses ad hoc signing and does not need a provisioning
+profile or a physical iPhone.
+The same source files are used for both targets. Select `device` instead of
+`simulator` in `build-ios.sh` to build the physical iPhone executable. Set
+`TYPEPHP_IOS_PROVISIONING_PROFILE` and `TYPEPHP_IOS_CODE_SIGN_IDENTITY` to
+package and sign the device app in the same command.
 
 The `.mm` bridges are deliberately thin. AppKit/UIKit own native controls and
 deliver events, but the shared TypePHP class owns the application behavior.

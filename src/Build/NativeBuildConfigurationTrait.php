@@ -52,19 +52,22 @@ trait NativeBuildConfigurationTrait
 
     protected function getIosSdkDir(): string
     {
-        $sdkDir = $this->getPhpxDir() . '/ios/iphoneos-arm64';
+        $target = str_ends_with(strtolower($this->targetPlatform), '-simulator')
+            ? 'iphonesimulator-arm64'
+            : 'iphoneos-arm64';
+        $sdkDir = $this->getPhpxDir() . '/ios/' . $target;
         if (!is_dir($sdkDir)) {
             $this->error(
-                'The iPhoneOS SDK was not found at: ' . $sdkDir . "\n"
+                'The iOS SDK was not found at: ' . $sdkDir . "\n"
                 . '  Build/install the matching SDK inside PHPX before compiling this target.'
             );
         }
         $abiStamp = $sdkDir . '/.typephp-ios-sdk-abi';
         if (!is_file($abiStamp)
-            || trim((string) file_get_contents($abiStamp)) !== 'typephp-iphoneos-arm64-sdk-abi-v1'
+            || trim((string) file_get_contents($abiStamp)) !== 'typephp-' . $target . '-sdk-abi-v1'
         ) {
             $this->error(
-                'The iPhoneOS SDK is missing or ABI-incompatible: ' . $sdkDir . "\n"
+                'The iOS SDK is missing or ABI-incompatible: ' . $sdkDir . "\n"
                 . '  Rebuild it with PHPX ios/build.sh and the matching PHP SDK.'
             );
         }
@@ -365,7 +368,7 @@ trait NativeBuildConfigurationTrait
             $buildHint = 'Build PHPX first (for example, run `nmake phpx` in ' . $this->getPhpxDir() . '\\build)';
         } elseif ($this->isIosTarget()) {
             $expected = $this->getPhpDir() . '/lib/libphpx.a';
-            $buildHint = 'Build the integrated iPhoneOS SDK in PHPX_HOME/ios/iphoneos-arm64';
+            $buildHint = 'Build the matching iOS SDK in PHPX_HOME/ios';
         } elseif ($this->isAndroidTarget()) {
             $expected = $this->getAndroidSdkDir() . '/lib/libphpx.a';
             $buildHint = 'Build the Android SDK with PHPX sdk/build-native.sh';
