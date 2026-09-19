@@ -342,15 +342,15 @@ class Preprocessor extends CompilerBase
         $ext = $this->getPlatform()->getObjectExtension();
 
         // Composer packages are immutable build inputs. Keep their objects in
-        // the project build directory instead of writing beside vendor sources.
+        // the project cache instead of writing beside vendor sources.
         if (isset($this->nanoRuntimeSources[$cppFile])) {
             $separator = $this->getPlatform()->getPathSeparator();
-            $objectDir = $this->buildDir . $separator . 'nano-objects';
-            if (!is_dir($objectDir)) {
-                mkdir($objectDir, 0777, true);
-            }
-            return $objectDir . $separator . $info['filename'] . '-'
-                . substr(sha1($cppFile), 0, 12) . $ext;
+            $name = $info['filename'] . '-' . substr(sha1($cppFile), 0, 12) . $ext;
+            return $this->cacheObjectFile(
+                $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                    . $separator . 'nano' . $separator . $name,
+                $this->buildDir . $separator . 'nano-objects' . $separator . $name,
+            );
         }
 
         // Keep the same path separator as cppFile
@@ -362,11 +362,12 @@ class Preprocessor extends CompilerBase
             // other PHPX misc sources are target-independent and share their
             // cached object files within the build directory.
             $cacheScope = $this->isProjectRuntimeEntryFile($cppFile) ? $this->targetName : 'shared';
-            $objectDir = $this->buildDir . $separator . 'phpx-misc' . $separator . $cacheScope;
-            if (!is_dir($objectDir)) {
-                mkdir($objectDir, 0777, true);
-            }
-            return $objectDir . $separator . $info['filename'] . $ext;
+            $name = $info['filename'] . $ext;
+            return $this->cacheObjectFile(
+                $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                    . $separator . 'phpx-misc' . $separator . $cacheScope . $separator . $name,
+                $this->buildDir . $separator . 'phpx-misc' . $separator . $cacheScope . $separator . $name,
+            );
         }
 
         $filename = $info['filename'];
@@ -376,7 +377,46 @@ class Preprocessor extends CompilerBase
             $filename .= '.' . $info['extension'];
         }
 
-        return $info['dirname'] . $this->getPlatform()->getPathSeparator() . $filename . $ext;
+        $separator = $this->getPlatform()->getPathSeparator();
+        $legacy = $info['dirname'] . $separator . $filename . $ext;
+        $normalizedBuildDir = rtrim(str_replace('\\', '/', $this->buildDir), '/') . '/';
+        if (str_starts_with($normalizedFile, $normalizedBuildDir)) {
+            $relative = substr($normalizedFile, strlen($normalizedBuildDir));
+            $relativeDir = dirname($relative);
+            $objectDir = $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                . $separator . 'generated';
+            if ($relativeDir !== '.') {
+                $objectDir .= $separator . str_replace('/', $separator, $relativeDir);
+            }
+        } else {
+            $objectDir = $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                . $separator . 'external' . $separator . substr(sha1($info['dirname']), 0, 16);
+            // A legacy object beside an external source may belong to a
+            // different build directory. Leave that file alone.
+            $legacy = null;
+        }
+        return $this->cacheObjectFile($objectDir . $separator . $filename . $ext, $legacy);
+    }
+
+    private function cacheObjectFile(string $object, ?string $legacy): string
+    {
+        $directory = dirname($object);
+        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+            throw new \RuntimeException('Cannot create object cache directory: ' . $directory);
+        }
+        if ($legacy !== null) {
+            foreach (['', '.typephp-cache'] as $suffix) {
+                if (!is_file($legacy . $suffix)) {
+                    continue;
+                }
+                if (is_file($object . $suffix)) {
+                    unlink($legacy . $suffix);
+                } else {
+                    rename($legacy . $suffix, $object . $suffix);
+                }
+            }
+        }
+        return $object;
     }
 
     private function isGeneratedCppFile(string $file): bool

@@ -304,6 +304,10 @@ sources:
   - path: src/windows
     if: PHP_OS_FAMILY == "Windows"
 
+# 将文件打包到二进制，并为 ZendVM 提供字节码及内存文件读取。
+bundled-files:
+  - vendor
+
 # 由项目自身的原生构建流程预编译。
 objects:
   - native/build/startup.o
@@ -333,6 +337,19 @@ ext-deps:
 `PHP_VERSION`、`PHP_VERSION_ID` 和 `PHP_OS_FAMILY`。命令行参数优先于 YAML
 中的同名配置。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
 `ZEND_MOD_REQUIRED`，缺少所需 PHP 扩展时由 Zend 拒绝加载模块。
+`bundled-files` 支持与 `sources` 相同的文件、目录及条件写法，仅在显式配置时启用。
+所列文件全部打包进二进制；未通过 `sources` 成功原生编译的 PHP 文件由 OPcache
+生成字节码。运行时的 `require` 和 `require_once` 从内存交给 ZendVM 执行，
+无需读取磁盘上的 PHP 文件。构建字节码的 PHP CLI、OPcache 与目标 PHP 运行时需匹配。
+运行二进制文件时无需 Composer 安装、磁盘 vendor 文件或 OPcache 扩展；Composer
+自动加载文件也已嵌入，仍按需加载类。构建时有 OPcache 的情况下，匿名类在首次执行
+对应 `new class` 表达式时从同一字节码表加载。未配置 `bundled-files` 且缺少
+OPcache 时，匿名类退回内嵌 PHP 代码方式。
+仅当目录名为 `vendor` 且目录下存在 `autoload.php` 时，才会使用字节码缓存；
+目录 mtime 及构建用的 PHP/OPcache 未变化时复用字节码。其他 `bundled-files`
+文件（包括缺少 `autoload.php` 的同名目录）每次构建都重新生成。
+修改目录下已有文件不会更新目录 mtime；这种情况可用 `--force` 重新生成
+vendor 字节码。
 通用的 `objects` 列表会把已有 `.o`/`.obj` 文件直接加入链接步骤。TypePHP
 不会重新编译这些文件；原生编译器、目标架构、编译参数和增量构建均由项目负责。
 使用目标通用参数的原生文件仍应放入 `sources`；仅当某个编译单元需要不同参数且
@@ -341,8 +358,9 @@ ext-deps:
 项目级 `cxx-flags`、`c-flags`、`asm-flags` 和 `ld-flags` 分别应用于
 C++、C、汇编和链接命令。
 
-构建目录保存生成的 C++、依赖对象和预编译头缓存。复用同一个构建目录可以显著加快
-增量构建；仅在确实需要重编 PHPX 公共对象时使用 `--force`。
+构建目录中的可读 C++ 和头文件与内部产物分开存放。对象文件、opcode 字节码、
+二进制归档、清单、链接响应文件和预编译头均放在 `build-dir/cache` 下。复用同一个
+构建目录可以显著加快增量构建；仅在确实需要重编 PHPX 公共对象时使用 `--force`。
 
 全部项目配置项及命令行优先级详见[编译器命令行](docs/zh-cn/COMPILER_CLI.md)。
 

@@ -187,7 +187,8 @@ trait NativeCommandOptionsTrait
             'sanitize' => $this->sanitize,
             'lto' => $this->enableLto,
             'target_platform' => $targetPlatform,
-            'response_file' => $this->getBuildDir() . DIRECTORY_SEPARATOR
+            'response_file' => $this->getBuildDir() . DIRECTORY_SEPARATOR . 'cache'
+                . DIRECTORY_SEPARATOR . 'link' . DIRECTORY_SEPARATOR
                 . basename($this->getTargetFileName()) . '.rsp',
         ];
 

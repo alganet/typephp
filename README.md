@@ -336,6 +336,10 @@ sources:
   - path: src/windows
     if: PHP_OS_FAMILY == "Windows"
 
+# Embed files for ZendVM execution and virtual file reads.
+bundled-files:
+  - vendor
+
 # Precompiled by the project's external native build.
 objects:
   - native/build/startup.o
@@ -366,6 +370,24 @@ directory; conditional entries support `PHP_VERSION`, `PHP_VERSION_ID`, and
 `PHP_OS_FAMILY`. CLI arguments override their YAML counterparts. Native linker
 dependencies belong in `link-libs`; `ext-deps` writes `ZEND_MOD_REQUIRED`
 entries so Zend can reject loading when a required PHP extension is missing.
+`bundled-files` accepts files or directories with the same conditional syntax.
+It is opt-in for embedded binary builds: all listed files are packed into the
+binary, and PHP files not successfully compiled from `sources` are stored as
+OPcache bytecode. `require` and `require_once` load those scripts through
+ZendVM without reading their PHP files from disk. The PHP CLI and OPcache used
+to build the blobs must match the target PHP runtime. The resulting binary
+does not need Composer installation, vendor files, or an OPcache extension at
+runtime: Composer's autoload files are embedded and still resolve classes on
+demand. When OPcache is available at build time, anonymous classes use the
+same opcode table when their `new class` expression is first executed. Without
+`bundled-files`, builds lacking OPcache use embedded PHP code for anonymous
+classes instead.
+Only a `vendor` directory containing `autoload.php` uses the opcode cache.
+Its blobs are reused while the directory mtime and build PHP/OPcache remain
+unchanged. All other `bundled-files` files, including files in a `vendor`
+directory without `autoload.php`, are regenerated on every build. Directory
+mtime does not change when an existing nested file is edited; use `--force`
+to regenerate vendor opcodes in that case.
 The generic `objects` list adds existing `.o`/`.obj` files directly to the
 link step. TypePHP never recompiles these files; the project owns their native
 compiler, architecture, flags, and incremental build. Keep native files that
@@ -376,8 +398,10 @@ post-link packaging step after tpc emits its ELF.
 Project-wide `cxx-flags`, `c-flags`, `asm-flags`, and `ld-flags` are applied to
 C++, C, assembler, and link commands respectively.
 
-The build directory contains generated C++, dependency objects, and the
-precompiled-header cache. Reusing it makes incremental builds much faster;
+The build directory keeps readable generated C++ and headers separate from
+internal artifacts. Objects, opcode blobs, binary archives, manifests, linker
+response files, and precompiled headers live under `build-dir/cache`. Reusing
+the build directory makes incremental builds much faster;
 use `--force` only when the reusable PHPX objects must be rebuilt.
 
 See [Compiler CLI](docs/en/COMPILER_CLI.md) for all project keys and command-line

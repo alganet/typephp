@@ -4279,15 +4279,26 @@ class CompilerBase implements PropertyAccessContext
                     }
                 }
                 $this->flattenEmbeddedClassTraits($classDef);
-                // Anonymous classes are defined by eval in the root namespace,
+                // Embedded classes are defined in the root namespace,
                 // so symbols imported inside them must be converted to
                 // fully-qualified names.
                 $this->resolveAnonClassNames($classDef);
-                $this->context->beforeStmtLines[] = 'static THREAD_LOCAL bool ' . $className . '_defined = false;';
                 $classCode = $this->genEmbeddedCode($classDef);
-                $this->addConstData($className . '_code', $classCode);
-                $this->context->beforeStmtLines[] = 'if (!' . $className . '_defined) {'
-                    . $className . '_defined = true; php::eval((const char *)' . $className . '_code);}';
+                if ($this->isBuildModeBin() && !$this->isNanoMode()
+                    && !$this->isIosTarget() && !$this->isAndroidTarget() && !$this->isWasiTarget()
+                    && method_exists($this, 'embedAnonymousClassCode')
+                    && method_exists($this, 'canEmbedAnonymousClassOpcode')
+                    && $this->canEmbedAnonymousClassOpcode()) {
+                    $opcodePath = $this->embedAnonymousClassCode($className, $classCode);
+                    $this->localHeaders[] = 'typephp_opcode_table.h';
+                    $this->context->beforeStmtLines[] = 'typephp_opcode_table_require("'
+                        . $this->escapeString($opcodePath) . '");';
+                } else {
+                    $this->context->beforeStmtLines[] = 'static THREAD_LOCAL bool ' . $className . '_defined = false;';
+                    $this->addConstData($className . '_code', $classCode);
+                    $this->context->beforeStmtLines[] = 'if (!' . $className . '_defined) {'
+                        . $className . '_defined = true; php::eval((const char *)' . $className . '_code);}';
+                }
                 $className = '\\' . $className;
                 $cePtr     = $this->getClassEntryPtr($className);
                 $ctorClassName = $className;

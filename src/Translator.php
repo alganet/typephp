@@ -762,6 +762,9 @@ class Translator extends Preprocessor
                 try {
                     $cppCode = $this->doConvert($phpCode);
                     $cppFile = $this->getCppFile($file);
+                    if ($this->isIncludeOnlyTranslationUnit($cppCode)) {
+                        $cppCode = '';
+                    }
                     $this->recordEmittedTypes($cppCode);
                     $cppCode = $this->splitLargeTranslationUnit($cppCode, $cppFile, $forceWrite);
                     if ($cppCode === '') {
@@ -786,6 +789,17 @@ class Translator extends Preprocessor
                 $this->compilationStatistics->finish();
             }
         }
+    }
+
+    private function isIncludeOnlyTranslationUnit(string $code): bool
+    {
+        foreach (preg_split('/\R/', $code) as $line) {
+            $line = trim($line);
+            if ($line !== '' && !str_starts_with($line, '#include ')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -2196,6 +2210,21 @@ CODE;
                 $sourceFiles[] = $runtimeSource;
             }
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
+            if ($this->bundledFiles !== [] || $this->embeddedOpcodeFiles !== []) {
+                $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_opcode_table.cc';
+                $versionHeader = $this->getPhpDir() . '/include/php/main/php_version.h';
+                $versionText = is_file($versionHeader) ? file_get_contents($versionHeader) : '';
+                if (!preg_match('/#define PHP_VERSION_ID\s+(\d+)/', $versionText, $versionMatch)) {
+                    throw new \RuntimeException("Cannot determine the target PHP version from {$versionHeader}");
+                }
+                $targetPhpVersion = (int) $versionMatch[1];
+                $decoder = match (true) {
+                    $targetPhpVersion >= 80400 && $targetPhpVersion < 80500 => 'opcode_unserialize_84.c',
+                    $targetPhpVersion >= 80500 && $targetPhpVersion < 80600 => 'opcode_unserialize_85.c',
+                    default => throw new \RuntimeException("Unsupported opcode decoder PHP version: {$targetPhpVersion}"),
+                };
+                $sourceFiles[] = $this->getPhpxDir() . '/thirdparty/opcache/' . $decoder;
+            }
         }
 
         if (!$this->isNanoMode()
@@ -2525,7 +2554,8 @@ CODE;
 
     private function getLinkCacheMetadataFile(string $targetFile): string
     {
-        return $this->getBuildDir() . DIRECTORY_SEPARATOR
+        return $this->getBuildDir() . DIRECTORY_SEPARATOR . 'cache'
+            . DIRECTORY_SEPARATOR . 'link' . DIRECTORY_SEPARATOR
             . basename($targetFile) . '.typephp-link-cache';
     }
 
@@ -2533,6 +2563,10 @@ CODE;
     private function writeLinkCache(array $objectFiles, string $targetFile): void
     {
         $metadata = $this->getLinkCacheMetadataFile($targetFile);
+        if (!is_dir(dirname($metadata)) && !mkdir(dirname($metadata), 0777, true)
+            && !is_dir(dirname($metadata))) {
+            throw new \RuntimeException('Cannot create link cache directory: ' . dirname($metadata));
+        }
         if (file_put_contents($metadata, $this->getLinkCacheKey($objectFiles, $targetFile) . PHP_EOL) === false) {
             throw new \RuntimeException('Cannot write link cache metadata: ' . $metadata);
         }
@@ -3830,6 +3864,52 @@ CODE;
             }
         } else {
             $list = $this->getFilesFromDir($projectDir);
+        }
+
+        // Raw files are bundled; PHP files not emitted by `sources` are also
+        // compiled into OPcache blobs for ZendVM execution at runtime.
+        if (array_key_exists('opcode-sources', $cfg)) {
+            $this->error('`opcode-sources` has been renamed to `bundled-files`');
+        }
+        if (array_key_exists('bundled-files', $cfg)) {
+            if (!is_array($cfg['bundled-files'])) {
+                $this->error('`bundled-files` must be an array');
+            }
+            foreach ($cfg['bundled-files'] as $entry) {
+                [$src, $condition] = $this->parseProjectYamlSourceEntry($entry);
+                if ($condition !== null && !$this->evaluateProjectYamlCondition($condition)) {
+                    continue;
+                }
+                $resolved = $this->getAbsolutePath($src, $projectDir);
+                if (!$resolved) {
+                    $this->error('Bundled file or directory does not exist: `' . $src . '`');
+                }
+                if (is_file($resolved)) {
+                    $this->bundledFiles[] = $resolved;
+                    continue;
+                }
+                $iterator = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($resolved, \FilesystemIterator::SKIP_DOTS),
+                );
+                foreach ($iterator as $file) {
+                    if ($file->isFile()) {
+                        $this->bundledFiles[] = $file->getPathname();
+                    }
+                }
+            }
+            $this->bundledFiles = array_values(array_unique($this->bundledFiles));
+            sort($this->bundledFiles, SORT_STRING);
+            $this->bundledPhpFiles = array_values(array_filter(
+                $this->bundledFiles,
+                static fn(string $file): bool => FileScanner::isPhpFile($file),
+            ));
+            if ($this->bundledFiles !== []) {
+                $this->output(
+                    'bundled-files: found ' . count($this->bundledFiles)
+                    . ' files (' . count($this->bundledPhpFiles) . ' PHP)',
+                    'lightBlue',
+                );
+            }
         }
 
         if (array_key_exists('optimize', $cfg)) {
